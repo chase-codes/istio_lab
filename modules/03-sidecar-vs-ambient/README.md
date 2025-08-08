@@ -34,6 +34,12 @@ Jennifer's platform team serves diverse needs:
 
 Let's deeply understand both approaches so you can guide customers like Jennifer.
 
+### Important Version and Compatibility Notes
+- **Ambient Mode**: Stable as of Istio 1.22+ (March 2024)
+- **AKS Compatibility**: Requires Azure CNI (not kubenet), Linux node pools
+- **Node OS**: Ambient mode requires Linux nodes (Windows nodes use sidecar)
+- **IPAM**: Works with Azure CNI, may need configuration with custom CNIs
+
 ### Lab Setup
 ```bash
 # Start with clean environment for comparison
@@ -85,11 +91,18 @@ kubectl top pods | grep -E "(latency-sensitive|high-throughput|legacy-app|cloud-
 # Get detailed resource consumption
 kubectl get pods -o json | jq -r '.items[] | select(.metadata.labels.app) | "\(.metadata.labels.app): \(.status.containerStatuses[] | select(.name=="istio-proxy") | .restartCount) \(.spec.containers[] | select(.name=="istio-proxy") | .resources)"'
 
-# Test latency impact
-kubectl run latency-test --image=curlimages/curl --rm -it -- sh
-# Inside container:
-time curl http://latency-sensitive/
-time curl http://high-throughput/
+# Performance testing methodology
+kubectl run perf-baseline --image=fortio/fortio --rm -it -- load -qps 100 -t 30s -c 10 http://latency-sensitive/
+# Record P50, P90, P99 latency and QPS achieved
+
+# Test with different load patterns
+kubectl run perf-burst --image=fortio/fortio --rm -it -- load -qps 1000 -t 10s -c 20 http://high-throughput/
+# Compare CPU/memory usage before and after
+
+# Small delta interpretation guide:
+# - <2ms P99 latency increase: Negligible for most workloads
+# - <5% CPU overhead: Acceptable for business value gained
+# - <100MB memory per sidecar: Typical baseline overhead
 ```
 
 **Performance measurements Jennifer needs:**
@@ -155,6 +168,7 @@ istioctl authn tls-check latency-sensitive.default.svc.cluster.local
 
 ```bash
 # Deploy waypoint for services that need L7 features
+# Note: Waypoint APIs are evolving - check latest Istio docs for your version
 kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
@@ -354,12 +368,19 @@ cat > decision-framework.md << EOF
 ✅ Team familiar with proxy-per-service patterns  
 ✅ Resource overhead acceptable for business value
 ✅ Uniform workload characteristics
+✅ Advanced Envoy filters or custom extensions required
 
 ### Choose Ambient When:
 ✅ Resource efficiency is critical
 ✅ Diverse workload types (latency-sensitive + batch)
 ✅ Gradual feature adoption preferred
 ✅ Want to minimize operational complexity
+✅ L4 security + selective L7 sufficient for most services
+
+### When Either Works (Start Small):
+- Small teams (< 50 services) can succeed with either approach
+- Test with non-production namespaces first
+- Consider hybrid: ambient for most services, sidecar for advanced use cases
 
 ### Jennifer's Specific Recommendation: **Ambient Mode**
 **Rationale:**

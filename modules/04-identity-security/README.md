@@ -53,6 +53,18 @@ kubectl expose deployment orders --port=80
 kubectl expose deployment payments --port=80
 kubectl expose deployment customer-db --port=5432
 
+# Create unique service accounts for least privilege (enterprise best practice)
+kubectl create serviceaccount frontend-sa
+kubectl create serviceaccount orders-sa
+kubectl create serviceaccount payments-sa
+kubectl create serviceaccount customer-db-sa
+
+# Update deployments to use dedicated service accounts
+kubectl patch deployment frontend -p '{"spec":{"template":{"spec":{"serviceAccount":"frontend-sa"}}}}'
+kubectl patch deployment orders -p '{"spec":{"template":{"spec":{"serviceAccount":"orders-sa"}}}}'
+kubectl patch deployment payments -p '{"spec":{"template":{"spec":{"serviceAccount":"payments-sa"}}}}'
+kubectl patch deployment customer-db -p '{"spec":{"template":{"spec":{"serviceAccount":"customer-db-sa"}}}}'
+
 # Enable sidecar injection
 kubectl label namespace default istio-injection=enabled
 kubectl rollout restart deployment frontend orders payments customer-db
@@ -150,7 +162,7 @@ spec:
   rules:
   - from:
     - source:
-        principals: ["cluster.local/ns/default/sa/default"]
+        principals: ["cluster.local/ns/default/sa/frontend-sa"]
   - to:
     - operation:
         methods: ["GET", "POST"]
@@ -183,8 +195,7 @@ spec:
   # Only orders service can access payments
   - from:
     - source:
-        principals: ["cluster.local/ns/default/sa/default"]
-        # In real scenario, you'd have separate service accounts
+        principals: ["cluster.local/ns/default/sa/orders-sa"]
   - to:
     - operation:
         methods: ["POST"]
@@ -210,7 +221,7 @@ spec:
   # Only specific services can access customer data
   - from:
     - source:
-        principals: ["cluster.local/ns/default/sa/default"]
+        principals: ["cluster.local/ns/default/sa/orders-sa"]
   - to:
     - operation:
         ports: ["5432"]
@@ -244,8 +255,9 @@ spec:
       app: frontend
   jwtRules:
   - issuer: "https://megabank.corp/identity"
-    jwksUri: "https://megabank.corp/.well-known/jwks.json"
+    jwksUri: "https://megabank.corp/.well-known/jwks.json"  # Placeholder - replace with real IdP
     audiences: ["frontend-service"]
+    # Note: In production, integrate with Azure AD/Entra, Auth0, Okta, etc.
 ---
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -275,6 +287,22 @@ kubectl exec deployment/frontend -- curl http://frontend/health  # Health check 
 ```
 
 **Sarah's enterprise integration**: Service mesh identity works with existing corporate identity systems
+
+### Comparison: Service Mesh vs CNI L7 + OPA for Runtime Security
+
+**CNI L7 + OPA Approach:**
+- **Cilium L7 NetworkPolicy**: HTTP method/path filtering at network layer
+- **OPA Gatekeeper**: Admission-time policy validation (deploy-time only)
+- **SPIRE**: Workload identity with certificate management
+- **Limitation**: No runtime per-request identity verification with L7 context
+
+**Service Mesh Advantage:**
+- **Runtime enforcement**: Every request verified with cryptographic identity
+- **L7 + Identity fusion**: Combine HTTP paths with workload identity in single policy
+- **Request-time decisions**: Policies based on JWT claims, headers, source identity
+- **Unified audit**: Single stream of allow/deny decisions with full context
+
+*Example: "Only orders-sa can POST to /process-payment with valid JWT" - impossible with CNI L7 alone*
 
 ## Security Audit and Compliance
 

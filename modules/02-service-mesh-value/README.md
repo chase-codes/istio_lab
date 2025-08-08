@@ -263,24 +263,25 @@ EOF
 
 ```bash
 # Simulate Marcus's current costs
+# Note: These are example calculations - adjust for your specific context
 cat > marcus-current-costs.md << EOF
-## Current Infrastructure Costs (Monthly)
+## Current Infrastructure Costs (Monthly) - Example Calculation
 
-### Developer Time
+### Developer Time (assumes $150/hour blended rate)
 - Debugging distributed issues: 40 hours/month × $150/hour = $6,000
 - Implementing retry logic: 20 hours/month × $150/hour = $3,000  
 - Setting up monitoring: 30 hours/month × $150/hour = $4,500
 - Deployment troubleshooting: 25 hours/month × $150/hour = $3,750
 
-### DevOps Team
+### DevOps Team (assumes $200/hour senior rate)
 - Manual service configuration: 60 hours/month × $200/hour = $12,000
 - Incident response: 40 hours/month × $200/hour = $8,000
 
-### Business Impact
+### Business Impact (highly variable by company)
 - Deployment-related downtime: 4 hours/month × $10,000/hour = $40,000
 - Delayed feature delivery: 2 weeks delay × $50,000 opportunity cost = $100,000
 
-**Total Monthly Cost: $177,250**
+**Total Monthly Cost: $177,250 (range: $90k-$300k based on company size)**
 EOF
 
 cat > marcus-service-mesh-value.md << EOF
@@ -307,6 +308,33 @@ EOF
 cat marcus-current-costs.md
 echo "---"
 cat marcus-service-mesh-value.md
+
+# DORA Metrics Impact Framework
+cat > dora-metrics-improvement.md << EOF
+## DORA Metrics: Service Mesh Impact
+
+### Deployment Frequency
+- Before: Weekly releases (fear of breaking production)
+- After: Daily releases (canary deployments reduce risk)
+- Improvement: 7x increase in deployment frequency
+
+### Lead Time for Changes  
+- Before: Code to production in 5-7 days (complex deployment process)
+- After: Code to production in 1-2 days (streamlined with traffic management)
+- Improvement: 60% reduction in lead time
+
+### Change Failure Rate
+- Before: 15% of deployments cause incidents (all-or-nothing deployment)
+- After: 3% cause incidents (canary catches issues early)
+- Improvement: 80% reduction in change failure rate
+
+### Mean Time to Recovery (MTTR)
+- Before: 4 hours (complex rollback procedures)
+- After: 30 seconds (instant traffic shifting)
+- Improvement: 99% reduction in MTTR
+EOF
+
+cat dora-metrics-improvement.md
 ```
 
 ### Exercise 8: Competitive Comparison
@@ -341,6 +369,23 @@ cat > build-vs-buy.md << EOF
 - Focus on business value, not infrastructure
 
 **Conclusion: 90% cost savings, 95% faster time-to-value**
+
+## Alternatives That Provide Partial Value
+
+### Deployment Tools (Argo Rollouts, Flagger)
+- **What they provide**: Canary deployments, blue-green rollouts
+- **What they don't**: Identity-based policies, automatic mTLS, unified observability
+- **Synergy with mesh**: Can work together - rollouts for app-level deployment, mesh for network-level control
+
+### Gateway + Ingress Controllers (NGINX, Envoy Gateway)
+- **What they provide**: North-south traffic management, some L7 policies
+- **What they don't**: East-west service communication, automatic certificate management
+- **When sufficient**: API-first architectures with simple internal communication
+
+### Application Performance Monitoring (APM) Tools
+- **What they provide**: Application-level observability, some distributed tracing
+- **What they don't**: Network-level insights, policy enforcement, automatic security
+- **Integration**: Service mesh telemetry enhances APM with network context
 EOF
 
 cat build-vs-buy.md

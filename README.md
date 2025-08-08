@@ -148,6 +148,28 @@ istio_lab/
 └── shared/                      # Utilities used across modules
 ```
 
+## 🎯 Key Learning Principles
+
+### Keep the Baselines
+These modules reinforce that service mesh **augments** rather than replaces existing security:
+- **NetworkPolicies**: Remain essential for coarse-grained network segmentation
+- **Perimeter controls**: Azure Firewall/NSGs provide outer ring of protection  
+- **Admission controls**: OPA/Gatekeeper validate deploy-time policies
+- **Service mesh adds**: Runtime identity verification and unified L7 policy/observability
+
+### Steel Man Positioning  
+Every module addresses sophisticated alternatives:
+- **CNI L7** (Cilium): Acknowledge HTTP/gRPC filtering capabilities
+- **PKI solutions** (cert-manager + SPIRE): Recognize workload identity approaches
+- **Observability** (OTEL + APM): Show how mesh complements application monitoring
+- **Deployment tools** (Argo Rollouts, Flagger): Explain synergy with mesh traffic management
+
+### Incremental Adoption
+- Start with non-production namespaces
+- Begin with L4 security (automatic mTLS) 
+- Add L7 features (policies, traffic management) as needed
+- Measure success with DORA metrics (deployment frequency, MTTR, change failure rate)
+
 ## 🎓 Completion and Next Steps
 
 When you finish all 8 modules:

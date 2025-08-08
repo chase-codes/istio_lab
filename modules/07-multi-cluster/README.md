@@ -36,6 +36,14 @@ Welcome back to **Sarah Martinez**, Principal Security Architect at MegaBank Cor
 
 Understanding enterprise-scale deployment patterns is crucial for large customer success.
 
+### Important Network Prerequisites
+- **East-West Connectivity**: Clusters must route to each other (VPN, private link, or public internet)
+- **DNS Resolution**: Cross-cluster service discovery requires network DNS or service entries
+- **Trust Bundles**: Certificate authority coordination across cluster boundaries
+- **Port Requirements**: Istio control plane ports (15010, 15011, 15012) open between clusters
+
+**Note**: Kind-based multi-cluster is a simulation. Production requires real network connectivity.
+
 ### Lab Setup
 ```bash
 # Create multiple clusters to simulate Sarah's global deployment

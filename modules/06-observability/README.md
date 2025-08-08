@@ -181,6 +181,34 @@ EOF
 
 **Lisa's monitoring foundation**: Rich metrics out-of-the-box without instrumentation
 
+### Cost and Overhead Considerations
+```bash
+# Observability cost management
+cat > observability-overhead.md << EOF
+## Service Mesh Observability: Cost and Overhead
+
+### Telemetry Overhead Guidelines
+- **Trace sampling**: Use 1% in production (100% only for development)
+- **Metric retention**: 15 days default, 90 days for compliance
+- **Log storage**: Structured logs, avoid full request/response bodies
+- **PII handling**: Scrub sensitive data before export
+
+### Storage Cost Estimates (1000 RPS system)
+- **Metrics**: ~$500/month (Prometheus storage)
+- **Traces**: ~$1,000/month at 1% sampling (Jaeger backend)
+- **Logs**: ~$2,000/month (structured access logs)
+- **Total**: ~$3,500/month vs $15,000/month for commercial APM
+
+### Alternative Telemetry Approaches
+**OpenTelemetry Auto-Instrumentation:**
+- **What it provides**: Application-level telemetry without code changes
+- **Service mesh complement**: OTEL for app context, mesh for network context
+- **Combined value**: Full stack observability from network to application
+EOF
+
+cat observability-overhead.md
+```
+
 ### Exercise 5: Intelligent Alerting Rules
 
 ```bash
@@ -342,6 +370,29 @@ cat > incident-scenario.md << EOF
 EOF
 
 cat incident-scenario.md
+
+# Incident triage runbook
+cat > incident-triage-runbook.md << EOF
+## 5-Minute Service Mesh Incident Triage
+
+### Step 1: Service Topology (30 seconds)
+1. Open Kiali, check Graph view for red edges
+2. Identify failing service(s) and traffic patterns
+
+### Step 2: Error Analysis (2 minutes)
+1. Click failing service, view error rates
+2. Check if errors are upstream or downstream
+3. Correlate with Prometheus metrics
+
+### Step 3: Trace Analysis (2 minutes)
+1. Open Jaeger, search for error traces
+2. Identify slowest spans and bottlenecks
+3. Find root cause service
+
+### Result: Root cause identified in 5 minutes vs 60+ minutes traditionally
+EOF
+
+cat incident-triage-runbook.md
 ```
 
 ### Exercise 9: Proactive Issue Detection
@@ -462,6 +513,9 @@ Practice showing Lisa how service mesh observability transforms reactive operati
 
 **"How do we train the team on these new tools?"**
 - *"The tools use familiar concepts - metrics are Prometheus-compatible, traces follow OpenTelemetry standards. Your existing Grafana dashboards work with service mesh metrics. It's evolutionary, not revolutionary."*
+
+**"What about our existing APM and log management investments?"**
+- *"Service mesh telemetry enhances rather than replaces existing APM tools. You get network-level context that your application monitoring can't provide. Many teams export mesh metrics to their existing Splunk, Datadog, or New Relic for unified dashboards."*
 
 ### ROI Calculation for Operations Team
 ```bash

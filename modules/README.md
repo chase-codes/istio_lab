@@ -1,5 +1,4 @@
 # Module Guide: Progressive Learning Journey
-
 Each module builds on the previous one, creating a cohesive learning experience from customer problems to technical mastery.
 
 ## Learning Philosophy

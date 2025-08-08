@@ -167,6 +167,7 @@ kubectl get services
 ```bash
 # Try to implement "only frontend can talk to backend"
 # With Kubernetes alone, you need NetworkPolicies:
+# Note: Using pinned image versions for reproducibility
 
 kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
@@ -228,11 +229,18 @@ kubectl logs deployment/backend
 - No **audit trail** - can't see who was denied access or why
 
 ```bash
-# Let's prove the plaintext issue
-kubectl exec deployment/frontend -- curl -v http://backend 2>&1 | grep "TCP_NODELAY"
-# You can see the actual HTTP headers in plaintext
+# Let's prove the plaintext issue with packet capture
+kubectl run tcpdump --image=nicolaka/netshoot --rm -it -- /bin/bash
+# Inside tcpdump pod:
+# tcpdump -i any -A "host backend.default.svc.cluster.local and port 80" &
+# curl http://backend/
+# You can see HTTP headers in plaintext in the packet capture
 
-# And show the identity drift problem
+# Alternative: Show plaintext in verbose curl
+kubectl exec deployment/frontend -- curl -v http://backend 2>&1 | grep -E "(GET|Host|User-Agent)"
+# HTTP headers visible in logs = plaintext communication
+
+# Show the identity drift problem
 kubectl scale deployment frontend --replicas=0
 kubectl scale deployment frontend --replicas=1
 # New frontend pod gets same label but different IP - policy still works, but no cryptographic identity
@@ -247,6 +255,32 @@ kubectl scale deployment frontend --replicas=1
 - Stitching together telemetry from CNI flow logs, app metrics, and tracing backends
 
 **Sarah's perspective**: "NetworkPolicies are a start, but at our scale (2,000+ services), the operational complexity of managing multiple systems becomes the bottleneck to zero-trust adoption."
+
+### Decision Framework: When CNI L7 vs Service Mesh?
+
+**CNI L7 + PKI Approach Sufficient When:**
+- Small to medium scale (< 100 services)
+- Team has deep networking expertise
+- Simple L7 policies (HTTP methods, basic paths)
+- Acceptable to manage multiple control planes
+
+**Service Mesh Adds Value When:**
+- Large scale (100s-1000s of services)
+- Need runtime identity verification (not just deploy-time)
+- Complex L7 policies with JWT validation, custom headers
+- Want unified control plane for policy, observability, and traffic management
+
+### Operational Complexity Comparison (30/60/90 Day Tasks)
+
+**CNI + PKI Approach:**
+- **30 days**: Setup Cilium L7 policies, configure cert-manager, deploy SPIRE, integrate OPA
+- **60 days**: Rotate root certificates, update OPA policies, tune Cilium performance, correlate 4 monitoring systems during incident
+- **90 days**: Upgrade each component separately, retrain team on policy syntax variations, debug cross-component issues
+
+**Service Mesh Approach:**
+- **30 days**: Install Istio, enable mTLS, deploy initial AuthorizationPolicies
+- **60 days**: Rotate happens automatically, tune policies in unified syntax, single-pane incident debugging
+- **90 days**: Single control plane upgrade, consistent policy language, streamlined operations
 
 ## The Service Mesh Solution Preview
 
@@ -412,7 +446,8 @@ kubectl logs $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.
 ### Technical Understanding
 - **Kubernetes + CNI + PKI + OPA**: Can achieve encryption, L7 policies, and observability through multiple specialized tools
 - **Service mesh value**: Consolidates these capabilities into a single control plane with cryptographic workload identity
-- **Adoption strategy**: Keep baseline NetworkPolicies; add mesh for unified policy/observability/audit at scale
+- **Baseline controls remain**: NetworkPolicies, perimeter firewalls, admission controls (OPA/Gatekeeper) complement mesh
+- **Adoption strategy**: Layer mesh on existing controls for runtime identity and unified management at scale
 
 ### Customer Insights
 - **Enterprise security**: Requires L7 policies, identity-based access, and audit trails

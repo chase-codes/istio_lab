@@ -36,6 +36,12 @@ Meet **Ahmed Hassan**, DevOps Manager at MegaManufacturing Corp. After seeing th
 
 Understanding how to integrate with existing systems is crucial for enterprise adoption.
 
+### Enterprise Integration Considerations
+- **API Gateway Coexistence**: Define clear boundaries between gateway (north-south) and mesh (east-west)
+- **Data Governance**: Understand data residency and privacy when exporting telemetry
+- **Vendor SLAs**: Review support commitments when integrating with commercial tools
+- **Change Management**: Plan rollback procedures for custom configurations
+
 ### Lab Setup
 ```bash
 # Start with foundation from previous modules
@@ -180,6 +186,8 @@ spec:
         paths: ["/health", "/ready"]
 ---
 # Custom authentication for legacy systems
+# WARNING: EnvoyFilter is an escape hatch - prefer higher-level APIs when possible
+# Test thoroughly and maintain version compatibility
 apiVersion: networking.istio.io/v1beta1
 kind: EnvoyFilter
 metadata:

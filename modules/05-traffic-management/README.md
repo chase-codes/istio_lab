@@ -137,20 +137,48 @@ kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[
 
 # Test traffic distribution
 echo "Testing traffic distribution (v1 should get ~90%, v2 should get ~10%):"
-for i in {1..20}; do kubectl exec deployment/productpage -- curl -s http://reviews/ | grep -o "v[12]" || echo "v1"; done | sort | uniq -c
+for i in {1..20}; do 
+  response=$(kubectl exec deployment/productpage -- curl -s http://reviews/ -w "\nVersion: %{http_code}\n")
+  echo "$response" | grep -q "httpd" && echo "v2" || echo "v1"
+done | sort | uniq -c
+
+# Alternative: Use explicit headers to identify versions
+kubectl patch deployment reviews-v1 -p '{"spec":{"template":{"spec":{"containers":[{"name":"httpd","env":[{"name":"SERVER_NAME","value":"reviews-v1"}]}]}}}}'
+kubectl patch deployment reviews-v2 -p '{"spec":{"template":{"spec":{"containers":[{"name":"httpd","env":[{"name":"SERVER_NAME","value":"reviews-v2"}]}]}}}}'
 
 # If v2 looks good, increase to 50%
 kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v1"},"weight":50},{"destination":{"host":"reviews","subset":"v2"},"weight":50}]}]}}'
 
 # Test again
 echo "Testing 50/50 split:"
-for i in {1..20}; do kubectl exec deployment/productpage -- curl -s http://reviews/ | grep -o "v[12]" || echo "v1"; done | sort | uniq -c
+for i in {1..20}; do 
+  response=$(kubectl exec deployment/productpage -- curl -s http://reviews/)
+  echo "$response" | grep -q "httpd" && echo "v2" || echo "v1"
+done | sort | uniq -c
 
 # Complete rollout to 100% v2
 kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v2"},"weight":100}]}]}}'
 ```
 
 **Marcus's business value**: Deploy with confidence, monitor real user impact, rollback instantly if needed
+
+## Alternatives and Ecosystem Integration
+
+### Deployment Tools (Complement Service Mesh)
+**Argo Rollouts / Flagger:**
+- **What they provide**: Application-level canary deployments, blue-green rollouts, automated promotion
+- **Synergy with mesh**: Rollouts handle app deployment, mesh handles network-level traffic control and policy
+- **Combined value**: App-level + network-level deployment safety
+
+**Feature Flags (LaunchDarkly, Split, etc.):**
+- **What they provide**: Code-level feature toggles, user targeting
+- **Synergy with mesh**: Feature flags control code paths, mesh controls traffic routing
+- **When to use together**: Complex rollouts with both feature and infrastructure changes
+
+### When Service Mesh Traffic Management Alone is Sufficient:
+- Simple microservices with clear service boundaries
+- Need for L7 routing, circuit breaking, and observability
+- Teams comfortable with infrastructure-level deployment controls
 
 ### Exercise 4: Header-Based Routing for Testing
 
@@ -295,6 +323,11 @@ spec:
     route:
     - destination: {host: reviews, subset: v2}
       weight: 100
+    fault:  # SLO/Error Budget Integration
+      delay:
+        percentage:
+          value: 0.1  # 0.1% of requests get delayed (SLO testing)
+        fixedDelay: 5s
 EOF
 
 # Test performance features
@@ -302,6 +335,31 @@ time kubectl exec deployment/productpage -- curl http://reviews/
 ```
 
 **Marcus's performance optimization**: Automatic routing to best-performing instances
+
+### SLO and Error Budget Integration
+```bash
+# Define SLO-based deployment gates
+cat > slo-deployment-gate.md << EOF
+## SLO-Based Canary Promotion
+
+### Service Level Objectives
+- **Availability**: 99.9% (8.76 hours downtime/month budget)
+- **Latency**: P99 < 100ms (SLI: 95% of requests)  
+- **Error Rate**: < 0.1% (SLI: error ratio)
+
+### Deployment Gate Criteria
+- **Continue canary if**: Error rate < 0.05% AND P99 latency < 50ms
+- **Hold canary if**: Error rate 0.05-0.1% OR P99 latency 50-100ms
+- **Rollback if**: Error rate > 0.1% OR P99 latency > 100ms
+
+### Error Budget Consumption
+- Each failed deployment consumes error budget
+- Track monthly budget consumption vs. deployment velocity
+- Gate deployments when error budget is exhausted
+EOF
+
+cat slo-deployment-gate.md
+```
 
 ## Business Impact Measurement
 
