@@ -1,0 +1,35 @@
+# OS files
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+
+# Python
+venv/
+__pycache__/
+
+# Node
+node_modules/
+dist/
+
+# Logs
+*.log
+
+# Env and secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.kubeconfig
+.kube/
+
+# Terraform
+.terraform/
+terraform.tfstate*
+
+# Misc
+*.bak
+*.tmp
