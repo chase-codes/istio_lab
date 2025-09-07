@@ -98,7 +98,7 @@ Still inside the debug pod, observe how Kubernetes routes requests to different 
 ```bash
 for i in $(seq 1 10); do
   echo "=== Request $i ==="
-  curl -s http://backend | grep "Server name:"
+  curl -s http://backend | sed -n 's/.*Server&nbsp;name:<\/span> <span>\([^<]*\).*/Server name: \1/p'
   sleep 1
 done
 ```
@@ -131,7 +131,7 @@ Inside the debug2 pod:
 
 ```bash
 for i in $(seq 1 5); do
-  curl -s http://backend | grep "Server name:"
+  curl -s http://backend | sed -n 's/.*Server&nbsp;name:<\/span> <span>\([^<]*\).*/Server name: \1/p'
   sleep 1
 done
 exit
