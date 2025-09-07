@@ -52,7 +52,7 @@ Create two services to simulate Sarah's microservices and scale the backend to o
 kubectl create deployment frontend --image=nginx
 kubectl create deployment backend --image=nginxdemos/hello
 kubectl scale deployment backend --replicas=3
-kubectl expose deployment frontend --port=80
+**kubectl** expose deployment frontend --port=80
 kubectl expose deployment backend --port=80
 ```
 
@@ -60,14 +60,18 @@ kubectl expose deployment backend --port=80
 
 ```bash
 kubectl get pods -l app=backend -o wide
+kubectl get services backend
 kubectl get endpointslices -l kubernetes.io/service-name=backend -o wide
 ```
 
-You should see 3 backend pods running on different Pod IPs, all registered as endpoints for the backend Service.
+You should see:
+- 3 backend pods running on different Pod IPs (like 10.244.x.x)
+- A backend Service with a stable ClusterIP (like 10.96.x.x) 
+- All pod IPs registered as endpoints behind the Service
 
 ### Step 2: Test Service Discovery
 
-Launch a debug pod to test connectivity and DNS resolution.
+Launch a debug pod to test connectivity and DNS resolution. This simulates how one service connects to another.
 
 ```bash
 kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
@@ -80,11 +84,13 @@ curl -sS http://frontend | head -n 1
 curl -sS http://backend | head -n 1
 ```
 
-Test DNS lookup:
+Test DNS lookup to see how Kubernetes resolves service names to IP addresses:
 
 ```bash
 dig +short backend.default.svc.cluster.local
 ```
+
+This should return the Service IP you saw earlier (like 10.96.x.x).
 
 #### If dig fails:
 ```bash
@@ -93,7 +99,7 @@ getent hosts backend.default.svc.cluster.local
 
 ### Step 3: Observe Load Balancing
 
-Still inside the debug pod, observe how Kubernetes routes requests to different backend pods:
+Still inside the debug pod, observe how Kubernetes routes requests to different backend pods. Each request to the same Service IP gets routed to different pods:
 
 ```bash
 for i in $(seq 1 10); do
@@ -102,6 +108,8 @@ for i in $(seq 1 10); do
   sleep 1
 done
 ```
+
+You should see different pod names (like backend-686576749d-abc12, backend-686576749d-def34, etc.) across requests, proving that Kubernetes is load balancing behind the scenes.
 
 Exit the debug pod:
 
@@ -114,9 +122,13 @@ exit
 ```bash
 kubectl get pods -l app=backend -o wide
 kubectl get endpoints backend -o wide
+kubectl get services backend
 ```
 
-Compare the Pod IPs from the endpoints with the server names you saw in the curl responses.
+Compare:
+- The Pod IPs from the endpoints (10.244.x.x addresses)
+- The pod names you saw in the curl responses  
+- The stable Service IP (10.96.x.x) that all requests went to
 
 ### Step 4: Demonstrate Session Affinity
 
@@ -144,16 +156,16 @@ kubectl patch service backend -p '{"spec": {"sessionAffinity": "None"}}'
 ```
 
 #### Reflection Questions
-- What Service IP did you connect to in all requests?
+- What Service IP did you connect to in all requests? (Hint: Check the output of `kubectl get services backend`)
 - How did the "Server name" change across requests before and after session affinity?
 - Where does the load balancing happen in the Kubernetes stack?
 
 **What you discovered about Kubernetes networking:**
-- **Service IP**: You always connect to the same Service IP (10.96.x.x) - this is the load balancer
+- **Service IP**: You always connect to the same Service IP (like 10.96.x.x) - this is Kubernetes' built-in load balancer
 - **Hidden load balancing**: Kubernetes routes each request to different pod IPs behind the scenes (notice how the "Server name" changes across requests)
 - **Abstraction layer**: Applications see a stable service endpoint, not individual pods
 - **Why this matters**: The load balancing is invisible to applications, but happens at the kernel/iptables level
-- **Flat networking**: Any pod can reach any service
+- **Flat networking**: Any pod can reach any service by default (which creates security concerns)
 
 ## Exercise 2: The Security Problem
 
