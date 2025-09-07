@@ -11,7 +11,7 @@
     - Endpoints: `istioctl proxy-config endpoints <pod> -n <ns>`
     - Clusters: `istioctl proxy-config clusters <pod> -n <ns>`
     - Routes: `istioctl proxy-config routes <pod> -n <ns>`
-  - TLS check: `istioctl authn tls-check <svc>`
+  - TLS check: `istioctl proxy-config clusters <pod> --fqdn <svc> --direction outbound`
 
 ### Observability
 - Kiali: `make kiali` then browse the Graph and Validations

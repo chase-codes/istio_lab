@@ -37,80 +37,149 @@ Meet **Lisa Park**, Senior Site Reliability Engineer at SocialStream, a high-tra
 Understanding the observability ecosystem is crucial for positioning to operations teams.
 
 ### Lab Setup
+
 ```bash
-# Start with complete service mesh from previous modules
 make kind-up
 make istio-sidecar
+```
 
-# Deploy SocialStream's microservices architecture
-kubectl create deployment frontend --image=nginx --replicas=3
-kubectl create deployment user-service --image=httpd --replicas=4
+## Exercise 1: Deploy SocialStream's Architecture
+
+### Step 1: Create Realistic Microservices
+
+Deploy a complex microservices setup to simulate Lisa's operational challenges.
+
+```bash
+kubectl create deployment frontend --image=nginxdemos/hello --replicas=3
+kubectl create deployment user-service --image=nginxdemos/hello --replicas=4
 kubectl create deployment post-service --image=nginx:alpine --replicas=5
-kubectl create deployment recommendation-engine --image=httpd --replicas=3
+kubectl create deployment recommendation-engine --image=nginxdemos/hello --replicas=3
 kubectl create deployment analytics --image=nginx --replicas=2
+```
 
+### Step 2: Expose Services
+
+```bash
 kubectl expose deployment frontend --port=80
 kubectl expose deployment user-service --port=80
 kubectl expose deployment post-service --port=80
 kubectl expose deployment recommendation-engine --port=80
 kubectl expose deployment analytics --port=80
+```
 
-# Enable sidecar injection
+### Step 3: Enable Sidecar Injection
+
+```bash
 kubectl label namespace default istio-injection=enabled
 kubectl rollout restart deployment frontend user-service post-service recommendation-engine analytics
+kubectl rollout status deployment frontend
+kubectl rollout status deployment user-service
+kubectl rollout status deployment post-service
+kubectl rollout status deployment recommendation-engine
+kubectl rollout status deployment analytics
+```
 
-kubectl rollout status deployment frontend user-service post-service recommendation-engine analytics
+### Step 4: Install Observability Stack
 
-# Install observability stack
+```bash
 make kiali
 ```
 
-### Exercise 1: The Current Debugging Experience
+#### Verify: Check Complex Deployment
 
 ```bash
-# Simulate Lisa's current debugging challenge
-kubectl run debug-session --image=curlimages/curl --rm -it -- sh
-# Inside container - simulate user reporting slowness:
-time curl http://frontend/
-# User says: "The app is slow"
-
-# Try to debug with basic Kubernetes tools
-kubectl get pods | grep -E "(frontend|user-service|post-service)"
-kubectl logs deployment/frontend | tail -10
-kubectl logs deployment/user-service | tail -10
-
-# Questions Lisa can't easily answer:
-# - Which service in the chain is slow?
-# - What's the error rate between services?
-# - Are there any retries or timeouts happening?
-# - What's the dependency graph of this request?
+kubectl get pods -o wide
+kubectl get services
 ```
+
+You should see 17 pods total across 5 different services.
+
+#### Reflection Questions
+- How would you debug issues across this many services?
+- What visibility do you have into service interactions?
+- How would you identify the root cause of a performance issue?
+
+## Exercise 2: Experience Current Debugging Challenges
+
+### Step 1: Simulate User Problem Report
+
+```bash
+kubectl run debug-session --image=curlimages/curl --rm -it -- sh
+```
+
+Inside the debug container, simulate a user complaint: "The app is slow"
+
+```bash
+time curl http://frontend/
+exit
+```
+
+### Step 2: Try Traditional Debugging
+
+```bash
+kubectl get pods | grep -E "(frontend|user-service|post-service)"
+kubectl logs deployment/frontend | tail -5
+kubectl logs deployment/user-service | tail -5
+```
+
+#### Verify: Limited Visibility
+
+```bash
+kubectl top pods 2>/dev/null || echo "Metrics server not available"
+```
+
+#### Reflection Questions
+- Which service in the chain is slow?
+- What's the error rate between services?
+- Are there any retries or timeouts happening?
+- What's the dependency graph of this request?
 
 **Lisa's current challenge**: Limited visibility into service interactions and performance
 
-### Exercise 2: Service Topology and Dependencies
+## Exercise 3: Service Topology and Dependencies
+
+### Step 1: Generate Realistic Traffic
 
 ```bash
-# Generate realistic traffic patterns
 kubectl run traffic-generator --image=fortio/fortio --restart=Never -- load -qps 50 -t 300s -c 4 http://frontend/ &
-
-# Open Kiali to see instant service topology
-# In browser: http://localhost:20001/kiali/
-# Navigate to Graph -> Select default namespace
-
-# What Lisa immediately sees:
-# 1. Complete service dependency graph
-# 2. Real-time traffic flow and volume
-# 3. Success/error rates per service
-# 4. Response time percentiles
 ```
+
+### Step 2: Create Service Dependencies
+
+```bash
+kubectl run user-traffic --image=curlimages/curl --restart=Never -- sh -c "
+while true; do
+  curl -s http://frontend/ >/dev/null
+  curl -s http://user-service/ >/dev/null
+  curl -s http://post-service/ >/dev/null
+  sleep 1
+done" &
+```
+
+### Step 3: Explore Kiali Dashboard
+
+Open Kiali and navigate to Graph -> Select default namespace
+
+#### Verify: Service Topology Visibility
+
+In Kiali, you should see:
+1. Complete service dependency graph
+2. Real-time traffic flow and volume
+3. Success/error rates per service
+4. Response time percentiles
+
+#### Reflection Questions
+- How does visual topology help with incident response?
+- What patterns can you identify in the traffic flow?
+- How would this help during a service outage?
 
 **Lisa's immediate value**: Visual understanding of system topology and health
 
-### Exercise 3: Distributed Tracing for Debugging
+## Exercise 4: Distributed Tracing for Debugging
+
+### Step 1: Enable Distributed Tracing
 
 ```bash
-# Enable distributed tracing
 kubectl apply -f - <<EOF
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
@@ -120,37 +189,62 @@ spec:
   meshConfig:
     defaultConfig:
       tracing:
-        sampling: 100.0  # 100% for demo, use 1.0% in production
+        sampling: 100.0
   values:
     pilot:
       traceSampling: 100.0
 EOF
+```
 
-# Install Jaeger for trace collection
+### Step 2: Install Jaeger
+
+```bash
 kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.22/samples/addons/jaeger.yaml
 kubectl -n istio-system rollout status deployment/jaeger
+```
 
-# Generate traced requests
+### Step 3: Generate Traced Requests
+
+```bash
 for i in {1..20}; do
   kubectl exec deployment/frontend -- curl -H "x-request-id: trace-${i}" http://user-service/
   kubectl exec deployment/frontend -- curl -H "x-request-id: trace-${i}" http://post-service/
   sleep 0.5
 done
-
-# Open Jaeger dashboard
-istioctl dashboard jaeger &
-# Search for traces by service or operation
 ```
+
+### Step 4: Explore Traces
+
+```bash
+istioctl dashboard jaeger &
+```
+
+#### Verify: End-to-End Request Tracing
+
+In Jaeger:
+1. Search for traces by service
+2. View request flow across services  
+3. Identify latency bottlenecks
+4. See error propagation patterns
+
+#### Reflection Questions
+- How does distributed tracing reduce debugging time?
+- What root cause analysis is now possible?
+- How would this help during complex incident response?
 
 **Lisa's debugging power**: End-to-end request tracing across all services
 
-### Exercise 4: Metrics and Alerting
+## Exercise 5: Metrics and Alerting Foundation
+
+### Step 1: Access Service Mesh Metrics
 
 ```bash
-# Access Prometheus metrics
 istioctl dashboard prometheus &
+```
 
-# Key metrics Lisa should monitor:
+### Step 2: Key SRE Metrics
+
+```bash
 cat > key-metrics.md << EOF
 ## Critical Service Mesh Metrics for SRE
 
@@ -172,47 +266,33 @@ envoy_cluster_outlier_detection_ejections_total
 ### mTLS Health
 istio_mutual_tls_total
 EOF
-
-# Query these in Prometheus:
-# 1. Request rate: rate(istio_requests_total[1m])
-# 2. Error rate: rate(istio_requests_total{response_code!~"2.."}[1m])
-# 3. P99 latency: histogram_quantile(0.99, rate(istio_request_duration_milliseconds_bucket[1m]))
 ```
+
+### Step 3: Query Metrics in Prometheus
+
+Try these queries:
+1. Request rate: `rate(istio_requests_total[1m])`
+2. Error rate: `rate(istio_requests_total{response_code!~"2.."}[1m])`
+3. P99 latency: `histogram_quantile(0.99, rate(istio_request_duration_milliseconds_bucket[1m]))`
+
+#### Verify: Rich Metrics Available
+
+```bash
+cat key-metrics.md
+```
+
+#### Reflection Questions
+- What metrics were previously difficult to obtain?
+- How does automatic metrics collection help SRE teams?
+- What alerting rules would be most valuable?
 
 **Lisa's monitoring foundation**: Rich metrics out-of-the-box without instrumentation
 
-### Cost and Overhead Considerations
-```bash
-# Observability cost management
-cat > observability-overhead.md << EOF
-## Service Mesh Observability: Cost and Overhead
+## Exercise 6: Intelligent Alerting Rules
 
-### Telemetry Overhead Guidelines
-- **Trace sampling**: Use 1% in production (100% only for development)
-- **Metric retention**: 15 days default, 90 days for compliance
-- **Log storage**: Structured logs, avoid full request/response bodies
-- **PII handling**: Scrub sensitive data before export
-
-### Storage Cost Estimates (1000 RPS system)
-- **Metrics**: ~$500/month (Prometheus storage)
-- **Traces**: ~$1,000/month at 1% sampling (Jaeger backend)
-- **Logs**: ~$2,000/month (structured access logs)
-- **Total**: ~$3,500/month vs $15,000/month for commercial APM
-
-### Alternative Telemetry Approaches
-**OpenTelemetry Auto-Instrumentation:**
-- **What it provides**: Application-level telemetry without code changes
-- **Service mesh complement**: OTEL for app context, mesh for network context
-- **Combined value**: Full stack observability from network to application
-EOF
-
-cat observability-overhead.md
-```
-
-### Exercise 5: Intelligent Alerting Rules
+### Step 1: Create SRE-Focused Alerts
 
 ```bash
-# Create SRE-focused alerting rules
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: ConfigMap
@@ -224,7 +304,6 @@ data:
     groups:
     - name: istio-sre-alerts
       rules:
-      # High error rate alert
       - alert: HighErrorRate
         expr: |
           (
@@ -236,9 +315,8 @@ data:
           severity: warning
         annotations:
           summary: "High error rate detected"
-          description: "Error rate is {{ $value }}% for {{ $labels.destination_service_name }}"
+          description: "Error rate is {{ \$value }}% for {{ \$labels.destination_service_name }}"
       
-      # High latency alert  
       - alert: HighLatency
         expr: |
           histogram_quantile(0.99,
@@ -249,448 +327,202 @@ data:
           severity: warning
         annotations:
           summary: "High latency detected"
-          description: "P99 latency is {{ $value }}ms for {{ $labels.destination_service_name }}"
-      
-      # Circuit breaker triggered
-      - alert: CircuitBreakerTriggered
-        expr: increase(envoy_cluster_outlier_detection_ejections_total[5m]) > 0
-        labels:
-          severity: critical
-        annotations:
-          summary: "Circuit breaker activated"
-          description: "Service {{ $labels.envoy_cluster_name }} is failing health checks"
+          description: "P99 latency is {{ \$value }}ms for {{ \$labels.destination_service_name }}"
 EOF
 ```
 
-**Lisa's alert intelligence**: Contextual alerts based on service mesh metrics
-
-### Exercise 6: Performance Analysis and Optimization
+### Step 2: Test Alert Conditions
 
 ```bash
-# Simulate performance issues for debugging practice
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: DestinationRule
-metadata:
-  name: user-service-performance
-spec:
-  host: user-service
-  trafficPolicy:
-    connectionPool:
-      tcp:
-        maxConnections: 1  # Artificially low to create bottleneck
-      http:
-        http1MaxPendingRequests: 1
-        maxRequestsPerConnection: 1
-EOF
-
-# Generate load to trigger performance issues
-kubectl run load-test --image=fortio/fortio --rm -it -- load -qps 20 -t 60s -c 10 http://user-service/
-
-# Analyze the results in Kiali:
-# 1. Service graph shows red edges (errors)
-# 2. Response time metrics show latency spikes
-# 3. Throughput graphs show request queuing
-
-# Fix the issue
-kubectl delete destinationrule user-service-performance
+kubectl run load-test --image=fortio/fortio --rm -it -- load -qps 100 -t 30s http://frontend/
 ```
 
-**Lisa's performance debugging**: Identify bottlenecks visually and fix them quickly
-
-### Exercise 7: Automatic Incident Response
+#### Verify: Alert Configuration
 
 ```bash
-# Configure automatic remediation
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: DestinationRule
-metadata:
-  name: auto-healing
-spec:
-  host: user-service
-  trafficPolicy:
-    outlierDetection:
-      consecutiveErrors: 3
-      interval: 30s
-      baseEjectionTime: 30s
-      maxEjectionPercent: 50
-    circuitBreaker:
-      connectionPool:
-        tcp:
-          maxConnections: 10
-        http:
-          http1MaxPendingRequests: 5
-          maxRequestsPerConnection: 2
-          maxRetries: 3
-EOF
-
-# Simulate failing instances
-kubectl patch deployment user-service -p '{"spec":{"template":{"spec":{"containers":[{"name":"httpd","image":"nginx:broken"}]}}}}'
-
-# Watch automatic recovery in Kiali
-# - Failing instances automatically removed from load balancing
-# - Circuit breaker prevents cascade failures
-# - Traffic automatically routes to healthy instances
+kubectl get configmap prometheus-alert-rules -n istio-system -o yaml
 ```
 
-**Lisa's automation**: Self-healing systems reduce manual intervention
+#### Reflection Questions
+- How do these alerts reduce noise compared to traditional monitoring?
+- What business impact do these technical metrics represent?
+- How would you integrate these with incident response workflows?
 
-## Incident Response Transformation
+## Exercise 7: Cost and Overhead Analysis
 
-### Exercise 8: Before/After Incident Response
+### Step 1: Observability Cost Framework
 
 ```bash
-# Simulate Lisa's typical incident scenario
-cat > incident-scenario.md << EOF
-## Incident: "Application is slow for users"
+cat > observability-overhead.md << EOF
+## Service Mesh Observability: Cost and Overhead
 
-### Before Service Mesh (Traditional Response)
-**Time: 0 min** - Alert: "Application slow"
-**Time: 5 min** - SRE logs into monitoring dashboards
-**Time: 15 min** - Check individual service logs
-**Time: 30 min** - Identify potential service (user-service)
-**Time: 45 min** - Trace through service code and dependencies
-**Time: 60 min** - Find database connection pool exhaustion
-**Time: 75 min** - Scale up database connections
-**Time: 90 min** - Verify fix and issue resolution
+### Telemetry Overhead Guidelines
+- **Trace sampling**: Use 1% in production (100% only for development)
+- **Metric retention**: 15 days default, 90 days for compliance
+- **Log storage**: Structured logs, avoid full request/response bodies
+- **PII handling**: Scrub sensitive data before export
 
-**Total MTTR: 90 minutes**
+### Storage Cost Estimates (1000 RPS system)
+- **Metrics**: ~\$500/month (Prometheus storage)
+- **Traces**: ~\$1,000/month at 1% sampling (Jaeger backend)
+- **Logs**: ~\$2,000/month (structured access logs)
+- **Total**: ~\$3,500/month vs \$15,000/month for commercial APM
 
-### With Service Mesh (Enhanced Response)
-**Time: 0 min** - Alert: "High latency on user-service"
-**Time: 2 min** - Open Kiali, see red edges pointing to user-service
-**Time: 5 min** - Open Jaeger, find slow traces
-**Time: 8 min** - Identify database connection bottleneck in trace
-**Time: 10 min** - Scale database connections automatically
-**Time: 15 min** - Verify green graphs in Kiali
-
-**Total MTTR: 15 minutes**
-**Improvement: 83% faster incident resolution**
+### Alternative Telemetry Approaches
+**OpenTelemetry Auto-Instrumentation:**
+- **What it provides**: Application-level telemetry without code changes
+- **Service mesh complement**: OTEL for app context, mesh for network context
+- **Combined value**: Full stack observability from network to application
 EOF
-
-cat incident-scenario.md
-
-# Incident triage runbook
-cat > incident-triage-runbook.md << EOF
-## 5-Minute Service Mesh Incident Triage
-
-### Step 1: Service Topology (30 seconds)
-1. Open Kiali, check Graph view for red edges
-2. Identify failing service(s) and traffic patterns
-
-### Step 2: Error Analysis (2 minutes)
-1. Click failing service, view error rates
-2. Check if errors are upstream or downstream
-3. Correlate with Prometheus metrics
-
-### Step 3: Trace Analysis (2 minutes)
-1. Open Jaeger, search for error traces
-2. Identify slowest spans and bottlenecks
-3. Find root cause service
-
-### Result: Root cause identified in 5 minutes vs 60+ minutes traditionally
-EOF
-
-cat incident-triage-runbook.md
 ```
 
-### Exercise 9: Proactive Issue Detection
+### Step 2: ROI Calculation
 
 ```bash
-# Set up predictive monitoring
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: proactive-alerts
-  namespace: istio-system
-data:
-  proactive-rules.yml: |
-    groups:
-    - name: predictive-sre
-      rules:
-      # Detect early signs of issues
-      - alert: LatencyTrendIncreasing
-        expr: |
-          increase(
-            histogram_quantile(0.95,
-              rate(istio_request_duration_milliseconds_bucket[5m])
-            )[30m:5m]
-          ) > 200
-        labels:
-          severity: warning
-        annotations:
-          summary: "Latency trend increasing"
-          description: "P95 latency increasing for {{ $labels.destination_service_name }}"
-      
-      # Resource pressure prediction
-      - alert: ConnectionPoolNearLimit
-        expr: |
-          envoy_http_downstream_cx_active / envoy_http_downstream_cx_limit > 0.8
-        labels:
-          severity: warning
-        annotations:
-          summary: "Connection pool approaching limit"
+cat > observability-roi.md << EOF
+## SRE Observability ROI
+
+### Before Service Mesh
+- MTTR: 4 hours average
+- Incident frequency: 8/month
+- SRE debugging time: 160 hours/month
+- Customer impact: \$50,000/incident
+- Monthly impact: \$400,000
+
+### After Service Mesh
+- MTTR: 30 minutes average
+- Incident frequency: 4/month (better detection)
+- SRE debugging time: 20 hours/month
+- Customer impact: \$5,000/incident (faster resolution)
+- Monthly impact: \$20,000
+
+### SRE Productivity Gains
+- Debugging time saved: 140 hours/month
+- Proactive vs reactive: 80% improvement
+- Alert noise reduction: 90% fewer false positives
+- On-call stress reduction: Measurable team satisfaction improvement
+
+**Annual Observability ROI: \$4.56M**
 EOF
 ```
 
-**Lisa's proactive operations**: Detect problems before they impact customers
-
-### Exercise 10: Cross-Team Collaboration Tools
+#### Verify: Review Cost Analysis
 
 ```bash
-# Create shared dashboards for different teams
-cat > team-dashboards.md << EOF
-## Service Mesh Dashboards by Team
-
-### SRE Dashboard (Lisa's team)
-- Service health overview (all services)
-- Error rates and SLA compliance
-- Resource utilization and capacity planning
-- Alert status and escalation paths
-
-### Development Team Dashboard
-- Individual service performance
-- Deployment success rates
-- Feature flag and canary status
-- Dependency health for their services
-
-### Product Team Dashboard  
-- User experience metrics
-- Feature performance and adoption
-- A/B testing results
-- Business KPI correlation with technical metrics
-
-### Security Team Dashboard
-- mTLS enforcement status
-- Authorization policy violations
-- Certificate expiration tracking
-- Compliance audit trails
-EOF
-
-cat team-dashboards.md
+cat observability-overhead.md
+echo "---"
+cat observability-roi.md
 ```
 
-## Customer Application: Transforming Operations
+#### Reflection Questions
+- How do observability costs compare to incident costs?
+- What's the value of SRE team productivity and satisfaction?
+- How would you optimize observability spend?
 
-Practice showing Lisa how service mesh observability transforms reactive operations into proactive system management.
+### Alternatives and Ecosystem Integration
 
-### The Operational Excellence Presentation
-*"Lisa, let me show you how service mesh observability transforms incident response from detective work into guided resolution..."*
+**OpenTelemetry Auto-Instrumentation:**
+- **What it provides**: Application-level telemetry without code changes
+- **Service mesh complement**: OTEL for app context, mesh for network context
+- **Combined value**: Full stack observability from network to application
 
-### Demo Script for SRE Leadership
-```bash
-# 1. Show current debugging challenges (5 minutes)
-# "Here's what SREs face when debugging distributed systems..."
+**Commercial APM Tools:**
+- **When they add value**: Application performance monitoring, business transaction tracing
+- **Service mesh complement**: Network-level visibility enhances APM context
+- **Cost consideration**: Service mesh provides 80% of value at 25% of cost
 
-# 2. Demonstrate service topology visibility (10 minutes)
-# Open Kiali, show service graph
-# "This is your entire system topology in real-time"
-# Point out traffic flow, health indicators, response times
+## Customer Application: Presenting to Lisa
 
-# 3. Show distributed tracing (10 minutes)  
-# Open Jaeger, search for traces
-# "Follow a single request across 10+ services"
-# Show how to identify bottlenecks quickly
+Practice showing Lisa how service mesh observability transforms operations.
 
-# 4. Demonstrate metrics and alerting (10 minutes)
-# Open Prometheus, show key SRE metrics
-# "Rich metrics out-of-the-box, no instrumentation required"
+### The SRE Problem Recap
+*"Lisa, you mentioned that MTTR is increasing as your system grows. Let me show you how service mesh gives you operational superpowers..."*
 
-# 5. Show automatic recovery (5 minutes)
-# Trigger circuit breaker, show automatic traffic shifting
-# "Self-healing systems reduce manual intervention"
-```
+### Demo Script for SRE Team
 
-### Handling SRE Team Concerns
+Show in Kiali:
+1. "Here's your entire system topology - no more guessing about dependencies"
+2. "Real-time health indicators show problems before customers complain"
+3. "Click on any service to see detailed metrics and traces"
 
-**"This adds another system to monitor and maintain"**
-- *"Service mesh observability consolidates your existing monitoring complexity. Instead of managing separate APM tools, log aggregators, and service discovery, you get comprehensive observability from the infrastructure layer."*
+Show in Jaeger:
+1. "Here's exactly what happened during that slow request"
+2. "You can see which service added latency and why"
+3. "No more manual correlation across multiple systems"
 
-**"What about the performance overhead of all this telemetry?"**
-- *"Modern service mesh implementations add <1ms latency and <5% CPU overhead. The operational efficiency gains far outweigh the minimal performance cost. Companies typically see 300-500% improvement in MTTR."*
+### Handling SRE Team Questions
 
-**"How do we train the team on these new tools?"**
-- *"The tools use familiar concepts - metrics are Prometheus-compatible, traces follow OpenTelemetry standards. Your existing Grafana dashboards work with service mesh metrics. It's evolutionary, not revolutionary."*
+**"How does this integrate with our existing monitoring?"**
+- *"Service mesh metrics integrate with Prometheus/Grafana. You keep your existing dashboards and add network-level context."*
 
-**"What about our existing APM and log management investments?"**
-- *"Service mesh telemetry enhances rather than replaces existing APM tools. You get network-level context that your application monitoring can't provide. Many teams export mesh metrics to their existing Splunk, Datadog, or New Relic for unified dashboards."*
+**"What about the overhead on our applications?"**
+- *"The sidecar adds ~1ms latency and 50MB memory per pod. The operational benefits far outweigh the minimal resource cost."*
 
-### ROI Calculation for Operations Team
-```bash
-cat > operations-roi.md << EOF
-## SRE Team ROI: Service Mesh Observability
-
-### Current Incident Response Costs
-- Average MTTR: 90 minutes
-- SRE hourly cost: $200
-- Incidents per month: 20
-- Monthly cost: 90 min × 20 incidents × $200/hour = $60,000
-
-### Additional Operations Costs
-- APM tool licensing: $15,000/month
-- Log aggregation: $8,000/month  
-- Custom monitoring setup: 40 hours/month × $200 = $8,000
-- Alert tuning and maintenance: 20 hours/month × $200 = $4,000
-
-**Current Monthly Operations Cost: $95,000**
-
-### With Service Mesh Observability
-- Average MTTR: 15 minutes (83% improvement)
-- Monthly incident cost: 15 min × 20 incidents × $200/hour = $10,000
-- Consolidated tooling saves: $23,000/month
-- Reduced maintenance: $6,000/month saved
-
-**New Monthly Operations Cost: $56,000**
-**Monthly Savings: $39,000**
-**Annual ROI: $468,000**
-EOF
-
-cat operations-roi.md
-```
-
-## Advanced Observability Patterns
-
-### Exercise 11: Service Level Objectives (SLOs)
-
-```bash
-# Implement SLO monitoring
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: slo-monitoring
-  namespace: istio-system
-data:
-  slo-rules.yml: |
-    groups:
-    - name: service-slos
-      rules:
-      # Availability SLO (99.9%)
-      - record: slo:availability_rate
-        expr: |
-          rate(istio_requests_total{reporter="destination",response_code=~"2.."}[5m]) /
-          rate(istio_requests_total{reporter="destination"}[5m])
-      
-      # Latency SLO (95% < 500ms)
-      - record: slo:latency_rate  
-        expr: |
-          histogram_quantile(0.95,
-            rate(istio_request_duration_milliseconds_bucket{reporter="destination"}[5m])
-          ) < 500
-      
-      # Error budget alerts
-      - alert: SLOErrorBudgetExhausted
-        expr: slo:availability_rate < 0.999
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "SLO error budget exhausted"
-EOF
-```
-
-### Exercise 12: Multi-Cluster Observability
-
-```bash
-# Configure federated monitoring (simulation)
-cat > multi-cluster-observability.yaml << EOF
-# This demonstrates federated Prometheus setup
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: federated-config
-  namespace: istio-system
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 15s
-    
-    rule_files:
-      - "alert-rules.yml"
-      - "slo-rules.yml"
-    
-    scrape_configs:
-    # Local cluster metrics
-    - job_name: 'istio-mesh'
-      kubernetes_sd_configs:
-      - role: endpoints
-        namespaces:
-          names: [istio-system, default]
-    
-    # Remote cluster federation
-    - job_name: 'federate-us-west'
-      scrape_interval: 15s
-      honor_labels: true
-      metrics_path: '/federate'
-      params:
-        'match[]':
-          - '{job=~"kubernetes-.*"}'
-          - '{__name__=~"istio_.*"}'
-      static_configs:
-        - targets: ['prometheus-us-west.example.com:9090']
-EOF
-
-kubectl apply -f multi-cluster-observability.yaml
-```
+**"How do we handle sensitive data in traces?"**
+- *"Istio supports trace scrubbing and sampling. You control exactly what telemetry is collected and where it goes."*
 
 ## Key Takeaways
 
 ### Technical Understanding
+- **Service topology**: Visual understanding of complex distributed systems
 - **Distributed tracing**: End-to-end request visibility across service boundaries
-- **Service topology**: Real-time understanding of system architecture and dependencies
-- **Intelligent alerting**: Context-aware alerts based on service mesh metrics
-- **Automatic recovery**: Self-healing systems reduce manual intervention
+- **Automatic metrics**: Rich observability without application instrumentation
+- **Intelligent alerting**: SRE-focused alerts that reduce noise and improve response
 
 ### Operational Value Framework
-- **MTTR reduction**: Faster incident resolution through better visibility
+- **MTTR reduction**: From hours to minutes through better visibility
 - **Proactive monitoring**: Detect issues before customer impact
-- **Team collaboration**: Shared understanding of system health
-- **Operational efficiency**: Reduce toil through automation and intelligence
+- **SRE productivity**: Focus on high-value work instead of debugging
+- **Cost optimization**: Enterprise observability at fraction of commercial APM cost
 
 ### PM Skills
-- **Operations positioning**: Address SRE and operations team concerns
-- **Efficiency demonstration**: Show concrete improvements in incident response
-- **Tool consolidation value**: Position as simplifying, not complicating, operations
-- **ROI quantification**: Measure and communicate operational efficiency gains
+- **Operations positioning**: Address SRE and DevOps team pain points directly
+- **ROI quantification**: Calculate productivity gains and incident cost reduction
+- **Technical depth**: Understand observability stack integration patterns
+- **Stakeholder alignment**: Connect technical capabilities to business outcomes
 
 ## Troubleshooting Guide
 
-### Kiali not showing traffic
+#### If Kiali not showing traffic:
 ```bash
-# Verify proxy configuration
-istioctl proxy-status
-kubectl -n istio-system get pods -l app=kiali
+kubectl get pods -n istio-system
+kubectl port-forward -n istio-system svc/kiali 20001:20001
 ```
 
-### Jaeger traces missing
+#### If Jaeger traces not appearing:
 ```bash
-# Check trace sampling configuration
-kubectl -n istio-system get configmap istio -o yaml | grep -A 5 tracing
-kubectl logs deployment/jaeger -n istio-system
+kubectl get pods -n istio-system -l app=jaeger
+kubectl logs -n istio-system deployment/jaeger
 ```
 
-### Prometheus metrics gaps
+#### If Prometheus metrics missing:
 ```bash
-# Verify metric collection
-kubectl -n istio-system get pods -l app=prometheus
-curl "http://prometheus:9090/api/v1/query?query=up"
+kubectl get pods -n istio-system -l app=prometheus
+kubectl port-forward -n istio-system svc/prometheus 9090:9090
+```
+
+## Cleanup
+
+```bash
+kubectl delete configmap prometheus-alert-rules -n istio-system
+kubectl delete deployment frontend user-service post-service recommendation-engine analytics traffic-generator user-traffic
+kubectl delete service frontend user-service post-service recommendation-engine analytics
+rm -f key-metrics.md observability-overhead.md observability-roi.md
 ```
 
 ## Next Steps
 
 You now understand:
-- Service mesh observability ecosystem and capabilities
-- Incident response transformation and MTTR improvement
-- Proactive monitoring and automated remediation
-- Operational efficiency gains and team collaboration
+- Service mesh observability architecture and capabilities
+- SRE value proposition and operational efficiency gains
+- Integration patterns with existing monitoring tools
+- Cost optimization and ROI calculation for observability investments
 
-**Next module**: [Multi-Cluster & Advanced Topologies](../07-multi-cluster/) - Learn how to implement service mesh at enterprise scale across multiple clusters.
+**Next module**: [Multi-cluster & Enterprise Scale](../07-multi-cluster/) - Learn how to operate service mesh across multiple clusters and environments.
 
 ```bash
 cd ../07-multi-cluster
 cat README.md
 ```
 
-**Progress check**: Can you demonstrate service mesh observability value to an SRE team? Can you quantify the operational efficiency improvements? If yes, you're ready for enterprise-scale patterns in Module 7.
+**Progress check**: Can you demonstrate observability value to an SRE team? Can you quantify MTTR improvements and operational efficiency gains? If yes, you're ready for enterprise scale in Module 7.

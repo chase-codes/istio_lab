@@ -37,56 +37,102 @@ Marcus's teams face conflicting pressures:
 Understanding advanced traffic management is key to positioning service mesh as an enabler of business velocity.
 
 ### Lab Setup
+
 ```bash
-# Start with secure foundation from Module 4
 make kind-up
 make istio-sidecar
+```
 
-# Deploy Marcus's microservices architecture
-kubectl create deployment productpage --image=nginx --replicas=3
-kubectl create deployment reviews-v1 --image=httpd --replicas=2
+## Exercise 1: Deploy Marcus's Microservices
+
+### Step 1: Create Application Architecture
+
+Deploy a realistic microservices setup to simulate Marcus's deployment challenges.
+
+```bash
+kubectl create deployment productpage --image=nginxdemos/hello --replicas=3
+kubectl create deployment reviews-v1 --image=nginxdemos/hello --replicas=2
 kubectl create deployment ratings --image=nginx:alpine --replicas=2
+```
 
+### Step 2: Expose Services
+
+```bash
 kubectl expose deployment productpage --port=80
 kubectl expose deployment reviews-v1 --port=80 --name=reviews
 kubectl expose deployment ratings --port=80
+```
 
-# Enable sidecar injection
+### Step 3: Enable Sidecar Injection
+
+```bash
 kubectl label namespace default istio-injection=enabled
 kubectl rollout restart deployment productpage reviews-v1 ratings
+kubectl rollout status deployment productpage
+kubectl rollout status deployment reviews-v1
+kubectl rollout status deployment ratings
+```
 
-kubectl rollout status deployment productpage reviews-v1 ratings
+### Step 4: Add Version Labels
 
-# Add version labels for traffic management
+```bash
 kubectl patch deployment reviews-v1 -p '{"spec":{"template":{"metadata":{"labels":{"version":"v1"}}}}}'
 kubectl patch deployment ratings -p '{"spec":{"template":{"metadata":{"labels":{"version":"v1"}}}}}'
 ```
 
-### Exercise 1: Current Deployment Risk
+#### Verify: Check Deployment Status
 
 ```bash
-# Simulate Marcus's current deployment process (dangerous)
-kubectl create deployment reviews-v2 --image=httpd:2.4.48 --replicas=2
-kubectl expose deployment reviews-v2 --port=80 --name=reviews-v2
-
-# Add version label
-kubectl patch deployment reviews-v2 -p '{"spec":{"template":{"metadata":{"labels":{"version":"v2"}}}}}'
-
-# Scale down v1 to simulate "deployment"
-kubectl scale deployment reviews-v1 --replicas=0
-
-# Test the "deployment"
-kubectl run test --image=curlimages/curl --rm -it -- curl http://reviews/
-
-# This simulates all-or-nothing deployment risk
+kubectl get pods -l app=reviews --show-labels
+kubectl get pods -l app=productpage --show-labels
 ```
+
+#### Reflection Questions
+- How do version labels enable traffic management?
+- What's the current deployment risk with this setup?
+- How would a bad deployment affect all users?
+
+## Exercise 2: Demonstrate Current Deployment Risk
+
+### Step 1: Simulate Dangerous All-or-Nothing Deployment
+
+```bash
+kubectl create deployment reviews-v2 --image=httpd:2.4.48 --replicas=2
+kubectl patch deployment reviews-v2 -p '{"spec":{"template":{"metadata":{"labels":{"version":"v2","app":"reviews"}}}}}'
+```
+
+### Step 2: Scale Down Old Version (Traditional Deployment)
+
+```bash
+kubectl scale deployment reviews-v1 --replicas=0
+```
+
+### Step 3: Test Impact on Users
+
+```bash
+kubectl run test --image=curlimages/curl --rm -it -- curl http://reviews/
+```
+
+#### Verify: All Traffic Goes to New Version
+
+```bash
+kubectl get pods -l app=reviews
+```
+
+Only v2 pods should be running.
+
+#### Reflection Questions
+- What happens if v2 has a critical bug?
+- How long would it take to rollback?
+- What's the customer impact during rollback?
 
 **Marcus's current risk**: All traffic immediately goes to new version with no safety net
 
-### Exercise 2: Implementing Canary Deployments
+## Exercise 3: Implement Safe Canary Deployments
+
+### Step 1: Create Traffic Management Rules
 
 ```bash
-# Set up traffic management with DestinationRule
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
@@ -102,8 +148,11 @@ spec:
     labels:
       version: v2
 EOF
+```
 
-# Start with 100% traffic to stable version
+### Step 2: Start with 100% Traffic to Stable Version
+
+```bash
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -118,53 +167,139 @@ spec:
     - destination: {host: reviews, subset: v2}
       weight: 0
 EOF
+```
 
-# Scale both versions up
+### Step 3: Scale Both Versions Up
+
+```bash
 kubectl scale deployment reviews-v1 --replicas=2
 kubectl scale deployment reviews-v2 --replicas=2
-
-# Test initial state (all traffic to v1)
-for i in {1..10}; do kubectl exec deployment/productpage -- curl -s http://reviews/; done
 ```
+
+#### Verify: Test Initial State
+
+```bash
+for i in {1..10}; do 
+  kubectl exec deployment/productpage -- curl -s http://reviews/ | grep -o "hello\|httpd" || echo "v1"
+done | sort | uniq -c
+```
+
+All traffic should go to v1.
+
+#### Reflection Questions
+- How does this differ from traditional deployment?
+- What safety does this provide?
+- How can you now test v2 without customer impact?
 
 **Marcus's safety improvement**: New version is deployed but receives no traffic until explicitly enabled
 
-### Exercise 3: Gradual Traffic Shifting
+## Exercise 4: Gradual Traffic Shifting
+
+### Step 1: Shift 10% Traffic to v2
 
 ```bash
-# Shift 10% traffic to v2 (initial canary)
 kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v1"},"weight":90},{"destination":{"host":"reviews","subset":"v2"},"weight":10}]}]}}'
+```
 
-# Test traffic distribution
-echo "Testing traffic distribution (v1 should get ~90%, v2 should get ~10%):"
+### Step 2: Test Traffic Distribution
+
+```bash
+echo "Testing 90/10 split (v1/v2):"
 for i in {1..20}; do 
-  response=$(kubectl exec deployment/productpage -- curl -s http://reviews/ -w "\nVersion: %{http_code}\n")
-  echo "$response" | grep -q "httpd" && echo "v2" || echo "v1"
+  kubectl exec deployment/productpage -- curl -s http://reviews/ | grep -o "hello\|httpd" || echo "v1"
 done | sort | uniq -c
+```
 
-# Alternative: Use explicit headers to identify versions
-kubectl patch deployment reviews-v1 -p '{"spec":{"template":{"spec":{"containers":[{"name":"httpd","env":[{"name":"SERVER_NAME","value":"reviews-v1"}]}]}}}}'
-kubectl patch deployment reviews-v2 -p '{"spec":{"template":{"spec":{"containers":[{"name":"httpd","env":[{"name":"SERVER_NAME","value":"reviews-v2"}]}]}}}}'
+### Step 3: Increase to 50% if v2 Looks Good
 
-# If v2 looks good, increase to 50%
+```bash
 kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v1"},"weight":50},{"destination":{"host":"reviews","subset":"v2"},"weight":50}]}]}}'
+```
 
-# Test again
-echo "Testing 50/50 split:"
-for i in {1..20}; do 
-  response=$(kubectl exec deployment/productpage -- curl -s http://reviews/)
-  echo "$response" | grep -q "httpd" && echo "v2" || echo "v1"
-done | sort | uniq -c
+### Step 4: Complete Rollout to 100% v2
 
-# Complete rollout to 100% v2
+```bash
 kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v2"},"weight":100}]}]}}'
 ```
 
+#### Verify: Test Final State
+
+```bash
+for i in {1..10}; do 
+  kubectl exec deployment/productpage -- curl -s http://reviews/ | grep -o "hello\|httpd" || echo "v1"
+done | sort | uniq -c
+```
+
+All traffic should now go to v2.
+
+#### Reflection Questions
+- How does gradual rollout reduce risk?
+- What monitoring would you want during each phase?
+- How quickly can you rollback if issues are detected?
+
 **Marcus's business value**: Deploy with confidence, monitor real user impact, rollback instantly if needed
 
-## Alternatives and Ecosystem Integration
+## Exercise 5: Header-Based Routing for Testing
 
-### Deployment Tools (Complement Service Mesh)
+### Step 1: Implement Testing Strategy
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: reviews-testing
+spec:
+  hosts: [reviews]
+  http:
+  - match:
+    - headers:
+        user-type: {exact: "internal"}
+    route:
+    - destination: {host: reviews, subset: v2}
+  - match:
+    - headers:
+        beta-user: {exact: "true"}
+    route:
+    - destination: {host: reviews, subset: v2}
+  - route:
+    - destination: {host: reviews, subset: v1}
+EOF
+```
+
+### Step 2: Test Internal Team Access
+
+```bash
+kubectl exec deployment/productpage -- curl -H "user-type: internal" http://reviews/
+```
+
+### Step 3: Test Beta User Access
+
+```bash
+kubectl exec deployment/productpage -- curl -H "beta-user: true" http://reviews/
+```
+
+### Step 4: Test Regular User Access
+
+```bash
+kubectl exec deployment/productpage -- curl http://reviews/
+```
+
+#### Verify: Different Routing Behavior
+
+Internal and beta users should get v2, regular users get v1.
+
+#### Reflection Questions
+- How does this enable safe testing in production?
+- What other routing criteria could be useful?
+- How does this integrate with feature flag systems?
+
+**Marcus's testing strategy**: Internal validation before customer exposure, beta user feedback
+
+### Alternatives and Ecosystem Integration
+
+**Deployment Tools (Complement Service Mesh):**
+
 **Argo Rollouts / Flagger:**
 - **What they provide**: Application-level canary deployments, blue-green rollouts, automated promotion
 - **Synergy with mesh**: Rollouts handle app deployment, mesh handles network-level traffic control and policy
@@ -175,63 +310,29 @@ kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[
 - **Synergy with mesh**: Feature flags control code paths, mesh controls traffic routing
 - **When to use together**: Complex rollouts with both feature and infrastructure changes
 
-### When Service Mesh Traffic Management Alone is Sufficient:
+**When Service Mesh Traffic Management Alone is Sufficient:**
 - Simple microservices with clear service boundaries
 - Need for L7 routing, circuit breaking, and observability
 - Teams comfortable with infrastructure-level deployment controls
 
-### Exercise 4: Header-Based Routing for Testing
+## Exercise 6: Automatic Failure Detection
+
+### Step 1: Deploy Observability
 
 ```bash
-# Enable internal team testing before customer exposure
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: reviews-testing
-spec:
-  hosts: [reviews]
-  http:
-  # Internal team gets new version
-  - match:
-    - headers:
-        user-type: {exact: "internal"}
-    route:
-    - destination: {host: reviews, subset: v2}
-  # Beta users get new version  
-  - match:
-    - headers:
-        beta-user: {exact: "true"}
-    route:
-    - destination: {host: reviews, subset: v2}
-  # Everyone else gets stable version
-  - route:
-    - destination: {host: reviews, subset: v1}
-EOF
-
-# Test internal team access
-kubectl exec deployment/productpage -- curl -H "user-type: internal" http://reviews/
-
-# Test beta user access
-kubectl exec deployment/productpage -- curl -H "beta-user: true" http://reviews/
-
-# Test regular user access
-kubectl exec deployment/productpage -- curl http://reviews/
+make kiali
 ```
 
-**Marcus's testing strategy**: Internal validation before customer exposure, beta user feedback
-
-### Exercise 5: Automatic Failure Detection and Recovery
+### Step 2: Create Failing Version for Testing
 
 ```bash
-# Deploy observability to detect issues
-make kiali
-
-# Create a "bad" version to simulate deployment failure
 kubectl create deployment reviews-v3 --image=nginx:broken --replicas=2
 kubectl patch deployment reviews-v3 -p '{"spec":{"template":{"metadata":{"labels":{"version":"v3","app":"reviews"}}}}}'
+```
 
-# Update DestinationRule to include v3
+### Step 3: Configure Automatic Failure Detection
+
+```bash
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
@@ -253,8 +354,11 @@ spec:
       baseEjectionTime: 30s
       maxEjectionPercent: 50
 EOF
+```
 
-# Route traffic to include the bad version
+### Step 4: Route Traffic to Include Bad Version
+
+```bash
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -269,17 +373,31 @@ spec:
     - destination: {host: reviews, subset: v3}  
       weight: 20
 EOF
-
-# Test - watch automatic failure detection
-for i in {1..30}; do kubectl exec deployment/productpage -- curl http://reviews/ -w "Status: %{http_code}\n" || echo "Failed"; sleep 1; done
 ```
+
+#### Verify: Watch Automatic Failure Handling
+
+```bash
+for i in {1..20}; do 
+  kubectl exec deployment/productpage -- curl http://reviews/ -w "Status: %{http_code}\n" -m 5 || echo "Failed"
+  sleep 1
+done
+```
+
+Watch as failing instances are automatically removed from traffic.
+
+#### Reflection Questions
+- How quickly are failing instances detected?
+- What's the customer impact during failure detection?
+- How does this compare to manual monitoring and intervention?
 
 **Marcus's automatic safety**: Circuit breakers automatically remove failing instances from traffic
 
-### Exercise 6: Performance-Based Routing
+## Exercise 7: Performance-Based Routing
+
+### Step 1: Configure Performance Optimization
 
 ```bash
-# Implement latency-based routing for performance optimization
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
@@ -294,7 +412,7 @@ spec:
     labels: {version: v2}
   trafficPolicy:
     loadBalancer:
-      simple: LEAST_CONN  # Route to least loaded instances
+      simple: LEAST_CONN
     connectionPool:
       tcp:
         maxConnections: 10
@@ -306,8 +424,11 @@ spec:
       interval: 30s
       baseEjectionTime: 30s
 EOF
+```
 
-# Route traffic based on performance characteristics
+### Step 2: Add Retry and Timeout Policies
+
+```bash
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -323,22 +444,32 @@ spec:
     route:
     - destination: {host: reviews, subset: v2}
       weight: 100
-    fault:  # SLO/Error Budget Integration
+    fault:
       delay:
         percentage:
-          value: 0.1  # 0.1% of requests get delayed (SLO testing)
+          value: 0.1
         fixedDelay: 5s
 EOF
+```
 
-# Test performance features
+#### Verify: Test Performance Features
+
+```bash
 time kubectl exec deployment/productpage -- curl http://reviews/
 ```
 
+#### Reflection Questions
+- How do these policies improve user experience?
+- What business impact does automatic retry have?
+- How does connection pooling help with scale?
+
 **Marcus's performance optimization**: Automatic routing to best-performing instances
 
-### SLO and Error Budget Integration
+## Exercise 8: SLO-Based Deployment Gates
+
+### Step 1: Define SLO Framework
+
 ```bash
-# Define SLO-based deployment gates
 cat > slo-deployment-gate.md << EOF
 ## SLO-Based Canary Promotion
 
@@ -347,293 +478,174 @@ cat > slo-deployment-gate.md << EOF
 - **Latency**: P99 < 100ms (SLI: 95% of requests)  
 - **Error Rate**: < 0.1% (SLI: error ratio)
 
-### Deployment Gate Criteria
-- **Continue canary if**: Error rate < 0.05% AND P99 latency < 50ms
-- **Hold canary if**: Error rate 0.05-0.1% OR P99 latency 50-100ms
-- **Rollback if**: Error rate > 0.1% OR P99 latency > 100ms
+### Canary Promotion Gates
+1. **10% Traffic**: Monitor for 15 minutes
+   - Error rate < 0.05%
+   - P99 latency < 50ms
+   - Zero 5xx errors
 
-### Error Budget Consumption
-- Each failed deployment consumes error budget
-- Track monthly budget consumption vs. deployment velocity
-- Gate deployments when error budget is exhausted
+2. **50% Traffic**: Monitor for 30 minutes
+   - Maintain SLO thresholds
+   - Customer satisfaction metrics stable
+   - No increase in support tickets
+
+3. **100% Traffic**: Full rollout
+   - All SLOs maintained
+   - Business metrics positive
+   - Ready for next deployment cycle
+
+### Automated Rollback Triggers
+- Error rate > 0.2% for 5 minutes
+- P99 latency > 200ms for 3 minutes  
+- Any 5xx error rate > 1%
 EOF
-
-cat slo-deployment-gate.md
 ```
 
-## Business Impact Measurement
-
-### Exercise 7: Deployment Velocity Metrics
+### Step 2: Business Impact Calculation
 
 ```bash
-# Simulate Marcus's deployment frequency improvement
-cat > deployment-metrics.md << EOF
-## Deployment Velocity: Before vs After Service Mesh
+cat > deployment-roi.md << EOF
+## Deployment Safety ROI
 
 ### Before Service Mesh
-- Deployment frequency: Weekly (fear of breaking production)
-- Rollback time: 4 hours (complex, multi-service coordination)
-- Mean time to recovery: 2 hours (difficult debugging)
-- Customer impact: High (all-or-nothing deployments)
-- Developer confidence: Low (fear-driven development)
+- Deployment frequency: Weekly (fear-based)
+- Average rollback time: 2 hours
+- Customer impact per bad deployment: $50,000
+- Bad deployments per month: 2
+- Monthly impact: $100,000
 
-### After Service Mesh (Traffic Management)
-- Deployment frequency: Daily (canary deployments reduce risk)
-- Rollback time: 30 seconds (instant traffic shifting)
-- Mean time to recovery: 15 minutes (automatic failure detection)
-- Customer impact: Minimal (gradual rollout, quick recovery)
-- Developer confidence: High (safety nets enable experimentation)
+### After Service Mesh  
+- Deployment frequency: Daily (confidence-based)
+- Average rollback time: 30 seconds
+- Customer impact per bad deployment: $500 (limited blast radius)
+- Bad deployments per month: 1 (better testing)
+- Monthly impact: $500
 
-### Business Impact
-- Feature delivery speed: 7x faster (daily vs weekly)
-- Revenue protection: 99.9% uptime vs 99.5%
-- Customer satisfaction: Improved due to fewer disruptions
-- Developer productivity: 40% more time on features vs firefighting
+### Business Value
+- Risk reduction: $99,500/month
+- Deployment velocity: 7x increase
+- Time to market: 4x faster
+- Developer productivity: +40% (less fear, more features)
+
+**Annual Deployment ROI: $1.2M**
 EOF
-
-cat deployment-metrics.md
 ```
 
-### Exercise 8: A/B Testing for Product Decisions
+#### Verify: Review Business Case
 
 ```bash
-# Show how traffic management enables product experimentation
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: product-ab-test
-spec:
-  hosts: [reviews]
-  http:
-  # 50% of users see new feature (v2)
-  - match:
-    - headers:
-        x-user-id:
-          regex: "[0-4].*"  # Users whose ID starts with 0-4
-    route:
-    - destination: {host: reviews, subset: v2}
-  # 50% see current feature (v1)  
-  - route:
-    - destination: {host: reviews, subset: v1}
-EOF
-
-# Test A/B distribution
-for i in {0..9}; do 
-  kubectl exec deployment/productpage -- curl -H "x-user-id: ${i}123" http://reviews/ | grep -o "v[12]" || echo "v1"
-done | sort | uniq -c
+cat slo-deployment-gate.md
+echo "---"
+cat deployment-roi.md
 ```
 
-**Marcus's product velocity**: Infrastructure enables rapid experimentation and data-driven decisions
+#### Reflection Questions
+- How do SLOs translate technical metrics to business impact?
+- What automation could be built on these foundations?
+- How does this change the relationship between development and operations?
 
-### Exercise 9: Geographic and Custom Routing
+## Customer Application: Presenting to Marcus
+
+Practice showing Marcus how traffic management transforms deployment risk into competitive advantage.
+
+### The Business Problem Recap
+*"Marcus, you mentioned that deployment fear is slowing down your competitive advantage. Let me show you how service mesh turns deployment into your secret weapon..."*
+
+### Demo Script for Executive Team
 
 ```bash
-# Implement routing for global deployment
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: geographic-routing
-spec:
-  hosts: [reviews]
-  http:
-  # EU users get EU-optimized version
-  - match:
-    - headers:
-        geo-region: {exact: "eu"}
-    route:
-    - destination: {host: reviews, subset: v1}
-  # US users get US-optimized version
-  - match:
-    - headers:
-        geo-region: {exact: "us"}  
-    route:
-    - destination: {host: reviews, subset: v2}
-  # Default routing
-  - route:
-    - destination: {host: reviews, subset: v1}
-EOF
-
-# Test geographic routing
-kubectl exec deployment/productpage -- curl -H "geo-region: eu" http://reviews/
-kubectl exec deployment/productpage -- curl -H "geo-region: us" http://reviews/
-```
-
-## Customer Application: Demonstrating Business Agility
-
-Practice showing Marcus how traffic management transforms deployment from risk to competitive advantage.
-
-### The Business Value Presentation
-*"Marcus, let me show you how service mesh traffic management turns deployment risk into your competitive advantage..."*
-
-### Demo Script for Board/Investors
-```bash
-# 1. Show current deployment risk (5 minutes)
-# "This is how most companies deploy - all traffic immediately goes to new version"
-
-# 2. Show canary deployment safety (10 minutes)  
-# "Watch how we can deploy safely with automatic rollback"
-kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v1"},"weight":90},{"destination":{"host":"reviews","subset":"v2"},"weight":10}]}]}}'
-
-# 3. Show instant rollback (5 minutes)
-# "If we detect any issues, rollback is instant"
-kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v1"},"weight":100}]}]}}'
-
-# 4. Show business metrics improvement (5 minutes)
-# Open Kiali to show real-time traffic and performance metrics
 make kiali
 ```
 
-### Handling Investor Questions
+Show in Kiali:
+1. "Here's your current traffic flow - 100% safe"
+2. "Now watch as we deploy a new version with zero customer risk"
+3. "We can shift traffic gradually and monitor real user impact"
+4. "If anything goes wrong, we rollback in seconds, not hours"
 
-**"How does this help us ship features faster?"**
-- *"Traditional deployments require 4-hour rollback windows. With service mesh, we can deploy multiple times per day because rollback is instant. This means we can respond to market demands 7x faster than competitors."*
-
-**"What if the traffic management itself fails?"**
-- *"Service mesh fails gracefully - if traffic management fails, traffic routes normally. We get safety features when they work, and normal operation when they don't. It's a pure upside investment."*
-
-**"How do we measure the business impact?"**
-- *"We track deployment frequency, time to market for features, and customer-impacting incidents. Companies typically see 300-500% improvement in deployment velocity with 90% reduction in customer impact."*
-
-### ROI Calculation for Startups
-```bash
-cat > startup-deployment-roi.md << EOF
-## Startup ROI: Safe Deployment Practices
-
-### Revenue Impact of Downtime (Current Risk)
-- Average outage duration: 4 hours
-- Revenue impact: $25,000/hour × 4 hours = $100,000
-- Outage frequency: 1 per month
-- Annual revenue risk: $1.2M
-
-### Revenue Impact with Service Mesh
-- Average outage duration: 15 minutes (instant rollback)
-- Revenue impact: $25,000/hour × 0.25 hours = $6,250
-- Outage frequency: 0.2 per month (canary catches issues)
-- Annual revenue risk: $15,000
-
-### Feature Velocity Impact
-- Before: Weekly deployments = 52 features/year
-- After: Daily deployments = 260 features/year
-- Additional feature value: 208 features × $10,000 value = $2.08M
-
-**Total Annual Value: $3.265M**
-**Implementation Cost: $150K**
-**ROI: 2,077%**
-EOF
-
-cat startup-deployment-roi.md
-```
-
-## Advanced Traffic Management Patterns
-
-### Exercise 10: Multi-Service Deployment Coordination
+### Deployment Confidence Demo
 
 ```bash
-# Show coordinated deployment across multiple services
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: coordinated-deployment
-spec:
-  hosts: [productpage, reviews, ratings]
-  http:
-  - match:
-    - headers:
-        canary-deployment: {exact: "true"}
-    route:
-    - destination: {host: productpage, subset: v2}
-    - destination: {host: reviews, subset: v2}  
-    - destination: {host: ratings, subset: v2}
-  - route:
-    - destination: {host: productpage, subset: v1}
-    - destination: {host: reviews, subset: v1}
-    - destination: {host: ratings, subset: v1}
-EOF
+kubectl patch virtualservice reviews-canary --type='merge' -p='{"spec":{"http":[{"route":[{"destination":{"host":"reviews","subset":"v1"},"weight":90},{"destination":{"host":"reviews","subset":"v2"},"weight":10}]}]}}'
 ```
 
-### Exercise 11: Automated Promotion Pipeline
+"10% of users are now testing the new version. If metrics look good, we increase. If not, we rollback instantly."
 
-```bash
-# Simulate GitOps-driven canary promotion
-cat > promotion-pipeline.yaml << EOF
-# This would be triggered by CI/CD pipeline based on metrics
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: automated-promotion
-  annotations:
-    promotion.istio.io/stage: "10-percent"  # Start at 10%
-    promotion.istio.io/success-criteria: "error_rate<1%,latency_p99<100ms"
-    promotion.istio.io/promotion-schedule: "10,25,50,100"  # Traffic weights
-spec:
-  hosts: [reviews]
-  http:
-  - route:
-    - destination: {host: reviews, subset: v1}
-      weight: 90
-    - destination: {host: reviews, subset: v2}
-      weight: 10
-EOF
+### Handling Board Questions
 
-kubectl apply -f promotion-pipeline.yaml
-```
+**"How do we know this won't slow down development?"**
+- *"This actually accelerates development by removing deployment fear. Teams can deploy daily instead of weekly because the risk is controlled."*
+
+**"What's the business impact of faster deployments?"**
+- *"Every week faster to market is worth $X in competitive advantage. Safe daily deployments mean 7x faster feature delivery."*
+
+**"What if the service mesh itself fails?"**
+- *"The mesh fails open - your applications continue working normally. You temporarily lose the advanced traffic management but maintain basic functionality."*
 
 ## Key Takeaways
 
 ### Technical Understanding
 - **Canary deployments**: Gradual traffic shifting reduces deployment risk
-- **Automatic failure detection**: Circuit breakers and outlier detection protect customers
-- **Header-based routing**: Enables sophisticated testing and rollout strategies
-- **Performance optimization**: Traffic management improves application performance
+- **Header-based routing**: Enable testing in production safely
+- **Circuit breakers**: Automatic failure detection and recovery
+- **Performance policies**: Built-in retry, timeout, and load balancing
 
 ### Business Value Framework
-- **Deployment velocity**: Safe deployments enable faster feature delivery
-- **Risk mitigation**: Instant rollback protects revenue and customer experience
-- **Competitive advantage**: Faster response to market demands
-- **Product experimentation**: A/B testing and feature flags drive better decisions
+- **Deployment velocity**: From weekly to daily deployments
+- **Risk mitigation**: Controlled blast radius and instant rollback
+- **Customer protection**: Issues caught before full user impact
+- **Competitive advantage**: Faster time-to-market with lower risk
 
 ### PM Skills
-- **Business agility positioning**: Show how infrastructure enables business speed
-- **Risk/reward communication**: Address safety concerns while demonstrating velocity gains
-- **Metrics-driven value**: Quantify deployment improvements in business terms
-- **Competitive differentiation**: Position faster deployment as market advantage
+- **Risk/reward positioning**: Show how infrastructure enables business agility
+- **Quantified business impact**: Calculate deployment ROI and competitive advantage
+- **Technical credibility**: Understand traffic management deeply enough to handle technical questions
+- **Executive communication**: Translate technical capabilities to business outcomes
 
 ## Troubleshooting Guide
 
-### Traffic not splitting correctly
+#### If traffic routing not working:
 ```bash
-istioctl proxy-config routes productpage-xxx --name http
-kubectl describe virtualservice reviews-canary
+istioctl analyze
+kubectl get virtualservice reviews-canary -o yaml
+kubectl get destinationrule reviews-destination -o yaml
 ```
 
-### Outlier detection not working
+#### If canary deployment stuck:
 ```bash
-kubectl describe destinationrule reviews-destination
-kubectl logs productpage-xxx -c istio-proxy | grep outlier
+kubectl get pods -l app=reviews --show-labels
+kubectl logs deployment/reviews-v2
 ```
 
-### Performance issues with routing
+#### If circuit breaker not triggering:
 ```bash
-istioctl proxy-config clusters productpage-xxx --fqdn reviews.default.svc.cluster.local
-kubectl top pods -l app=reviews
+kubectl logs deployment/productpage -c istio-proxy | grep outlier
+istioctl proxy-config endpoints $(kubectl get pod -l app=productpage -o jsonpath='{.items[0].metadata.name}') --cluster "outbound|80||reviews.default.svc.cluster.local"
+```
+
+## Cleanup
+
+```bash
+kubectl delete virtualservice --all
+kubectl delete destinationrule --all
+kubectl delete deployment productpage reviews-v1 reviews-v2 reviews-v3 ratings
+kubectl delete service productpage reviews ratings
+rm -f slo-deployment-gate.md deployment-roi.md
 ```
 
 ## Next Steps
 
 You now understand:
 - Advanced traffic management for safe deployments
-- Business agility through infrastructure capabilities
-- Deployment velocity optimization and risk mitigation
-- Competitive positioning of deployment speed
+- Business value of deployment velocity and safety
+- Integration with deployment tools and SLO frameworks
+- Executive positioning of technical capabilities
 
-**Next module**: [Observability & Incident Response](../06-observability/) - Learn how to debug distributed systems and reduce incident response time.
+**Next module**: [Observability & Troubleshooting](../06-observability/) - Learn how to provide operational excellence through comprehensive observability.
 
 ```bash
 cd ../06-observability
 cat README.md
 ```
 
-**Progress check**: Can you demonstrate canary deployments to a startup CTO? Can you quantify the business impact of deployment safety? If yes, you're ready for operational excellence in Module 6.
+**Progress check**: Can you demonstrate safe deployment practices to a startup CTO? Can you quantify the business value of deployment velocity and safety? If yes, you're ready for operational excellence in Module 6.

@@ -36,71 +36,147 @@ Meet **Sarah Martinez**, Principal Security Architect at MegaBank Corp. She's fa
 Let's start with what Kubernetes gives us and where it falls short for customers like Sarah.
 
 ### Lab Setup
+
 ```bash
-# Start with clean environment
 make kind-up
 kubectl cluster-info
 ```
 
-### Exercise 1: Basic Kubernetes Networking
+## Exercise 1: Basic Kubernetes Networking
+
+### Step 1: Deploy Applications
+
+Create two services to simulate Sarah's microservices and scale the backend to observe load balancing.
 
 ```bash
-# Create two services to simulate Sarah's microservices
 kubectl create deployment frontend --image=nginx
-kubectl create deployment backend --image=httpd
-
-# Scale to multiple replicas to observe load balancing
+kubectl create deployment backend --image=nginxdemos/hello
 kubectl scale deployment backend --replicas=3
-
-# Expose services
 kubectl expose deployment frontend --port=80
 kubectl expose deployment backend --port=80
-
-# Verify multiple endpoints are registered for the backend
-kubectl get endpoints backend -o wide
-kubectl get endpointslices | grep backend
-
-# Test basic connectivity from a toolbox pod
-kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
-
-# Inside the debug pod:
-# 1) Basic HTTP reachability
-curl -sS http://frontend | head -n 1
-curl -sS http://backend | head -n 1
-
-# 2) DNS lookup (nslookup may show "norecurse" in some images)
-# Prefer dig:
-dig +short backend.default.svc.cluster.local
-# If needed:
-#   dig +norecurse backend.default.svc.cluster.local
-#   getent hosts backend.default.svc.cluster.local
-
-# 3) Observe client-side distribution across backend pods
-# (prints the remote pod IP each request)
-for i in $(seq 1 10); do \
-  curl -s -o /dev/null -w '%{remote_ip}\n' http://backend; \
-  sleep 0.2; \
-done | sort | uniq -c
 ```
 
-**What you just saw:**
-- **DNS-based service discovery**: Services find each other by name
-- **Automatic load balancing**: Requests distributed across multiple backend pod IPs
-- **Flat networking**: Any pod can reach any service
-
-### Exercise 2: The Security Problem
+#### Verify: Check Deployment Status
 
 ```bash
-# Create a "malicious" pod to show the security issue
-kubectl run attacker --image=curlimages/curl -it --rm -- sh
+kubectl get pods -l app=backend -o wide
+kubectl get endpointslices -l kubernetes.io/service-name=backend -o wide
+```
 
-# Inside the attacker pod, you can access everything:
+You should see 3 backend pods running on different Pod IPs, all registered as endpoints for the backend Service.
+
+### Step 2: Test Service Discovery
+
+Launch a debug pod to test connectivity and DNS resolution.
+
+```bash
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+```
+
+Inside the debug pod, test basic HTTP reachability:
+
+```bash
+curl -sS http://frontend | head -n 1
+curl -sS http://backend | head -n 1
+```
+
+Test DNS lookup:
+
+```bash
+dig +short backend.default.svc.cluster.local
+```
+
+#### If dig fails:
+```bash
+getent hosts backend.default.svc.cluster.local
+```
+
+### Step 3: Observe Load Balancing
+
+Still inside the debug pod, observe how Kubernetes routes requests to different backend pods:
+
+```bash
+for i in $(seq 1 10); do
+  echo "=== Request $i ==="
+  curl -s http://backend | grep "Server name:"
+  sleep 1
+done
+```
+
+Exit the debug pod:
+
+```bash
+exit
+```
+
+#### Verify: Check Backend Infrastructure
+
+```bash
+kubectl get pods -l app=backend -o wide
+kubectl get endpoints backend -o wide
+```
+
+Compare the Pod IPs from the endpoints with the server names you saw in the curl responses.
+
+### Step 4: Demonstrate Session Affinity
+
+Show how kube-proxy normally load balances, then make it sticky to prove the load balancing behavior.
+
+```bash
+kubectl patch service backend -p '{"spec": {"sessionAffinity": "ClientIP"}}'
+kubectl run debug2 --image=nicolaka/netshoot -it --rm -- bash
+```
+
+Inside the debug2 pod:
+
+```bash
+for i in $(seq 1 5); do
+  curl -s http://backend | grep "Server name:"
+  sleep 1
+done
+exit
+```
+
+Reset to default load balancing:
+
+```bash
+kubectl patch service backend -p '{"spec": {"sessionAffinity": "None"}}'
+```
+
+#### Reflection Questions
+- What Service IP did you connect to in all requests?
+- How did the "Server name" change across requests before and after session affinity?
+- Where does the load balancing happen in the Kubernetes stack?
+
+**What you discovered about Kubernetes networking:**
+- **Service IP**: You always connect to the same Service IP (10.96.x.x) - this is the load balancer
+- **Hidden load balancing**: Kubernetes routes each request to different pod IPs behind the scenes (notice how the "Server name" changes across requests)
+- **Abstraction layer**: Applications see a stable service endpoint, not individual pods
+- **Why this matters**: The load balancing is invisible to applications, but happens at the kernel/iptables level
+- **Flat networking**: Any pod can reach any service
+
+## Exercise 2: The Security Problem
+
+### Step 1: Demonstrate Flat Network Access
+
+Create a malicious pod to show how any compromised service can access everything.
+
+```bash
+kubectl run attacker --image=curlimages/curl -it --rm -- sh
+```
+
+Inside the attacker pod, access everything:
+
+```bash
 curl http://frontend
 curl http://backend
 curl http://kube-dns.kube-system:53
-
-# This simulates what happens if any service gets compromised
+exit
 ```
+
+#### Reflection Questions
+- What prevents the attacker pod from accessing your services?
+- What happens if any legitimate service gets compromised?
 
 **Platform team response**: *"We can fix this with default-deny NetworkPolicies and namespace isolation."*
 
@@ -112,45 +188,57 @@ curl http://kube-dns.kube-system:53
 
 **Sarah's perspective**: "Any compromised service can access our entire infrastructure. NetworkPolicies help, but I need identity-based L7 policies that survive infrastructure changes."
 
-### Exercise 3: The Observability Gap
+## Exercise 3: The Observability Gap
+
+### Step 1: Generate Traffic
+
+Create traffic between services to simulate normal operations.
 
 ```bash
-# Generate some traffic between services
 for i in {1..10}; do
   kubectl exec deployment/frontend -- curl http://backend
   sleep 1
 done
+```
 
-# Try to understand what's happening in your "network"
+### Step 2: Try to Understand Network Activity
+
+Attempt to answer basic questions about service communication using standard Kubernetes tools.
+
+```bash
 kubectl get pods -o wide
 kubectl logs deployment/frontend
 kubectl logs deployment/backend
+```
 
-# Questions you can't answer from standard Kubernetes:
-# 1) Which services are talking to each other?
+### Step 3: Test Observability Limitations
+
+Try to answer these questions with standard Kubernetes:
+
+```bash
+echo "1) Which services are talking to each other?"
 kubectl get pods -o wide
-# You see pod IPs, but no service-to-service communication map
 
-# 2) How much traffic is flowing between services?
-kubectl top pods
-# Shows CPU/memory, but no network traffic metrics per service
+echo "2) How much traffic is flowing between services?"
+kubectl get pods --show-labels
 
-# 3) What's the latency between frontend and backend?
-kubectl exec deployment/frontend -- time curl http://backend
-# You can time individual requests, but no aggregated latency metrics
+echo "3) What's the latency between frontend and backend?"
+kubectl exec deployment/frontend -- curl -w "Time: %{time_total}s\n" -s -o /dev/null http://backend
 
-# 4) Are there any failed requests or retry patterns?
+echo "4) Are there any failed requests or retry patterns?"
 kubectl logs deployment/frontend | grep -i error
 kubectl logs deployment/backend | grep -i error
-# Application logs may not show network-level failures
 
-# 5) What's the dependency graph of my applications?
+echo "5) What's the dependency graph of my applications?"
 kubectl get services
-# Shows services exist, but not WHO calls WHOM
 
-# 6) Security: Who accessed what, when?
-# No audit trail of service-to-service access
+echo "6) Security: Who accessed what, when?"
+echo "No audit trail of service-to-service access available"
 ```
+
+#### Reflection Questions
+- What information can you get about service-to-service communication?
+- What critical visibility is missing for security and troubleshooting?
 
 **Platform team response**: *"We have Prometheus + OpenTelemetry + Jaeger for observability, plus our CNI exports flow logs."*
 
@@ -162,13 +250,13 @@ kubectl get services
 
 **Sarah's perspective**: "When there's a security incident, correlating 4-5 data sources increases our MTTR. We need cryptographically verifiable 'service A talked to service B' audit trails."
 
-### Exercise 4: The Policy Enforcement Problem
+## Exercise 4: The Policy Enforcement Problem
+
+### Step 1: Implement Basic Network Policy
+
+Try to implement "only frontend can talk to backend" using Kubernetes NetworkPolicies.
 
 ```bash
-# Try to implement "only frontend can talk to backend"
-# With Kubernetes alone, you need NetworkPolicies:
-# Note: Using pinned image versions for reproducibility
-
 kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -189,37 +277,62 @@ spec:
     - protocol: TCP
       port: 80
 EOF
-
-# Test basic connectivity
-kubectl run attacker --image=curlimages/curl -it --rm -- curl http://backend --timeout=5
-# Should fail
-
-kubectl exec deployment/frontend -- curl http://backend --timeout=5
-# Should work
 ```
 
-**What worked**: Basic IP/port-based access control
-
-Now let's try to implement more sophisticated policies:
+#### Verify: Test Basic Connectivity
 
 ```bash
-# Try to implement "only GET requests to /status path allowed"
-# NetworkPolicies can't see HTTP verbs or paths - they only see TCP/80
-
-# Even though frontend is allowed, both of these work:
-kubectl exec deployment/frontend -- curl http://backend/admin/delete
-kubectl exec deployment/frontend -- curl -X POST http://backend/sensitive-data
-
-# Try to implement "only requests with valid JWT token"
-# NetworkPolicies can't see HTTP headers
-
-kubectl exec deployment/frontend -- curl -H "Authorization: Bearer fake-token" http://backend
-# Still works - NetworkPolicy doesn't validate the token
-
-# Try to see what traffic is being blocked
-kubectl logs deployment/backend
-# No audit trail - you can't see WHO was denied or WHY
+kubectl run attacker --image=curlimages/curl -it --rm -- curl -m 5 http://backend
 ```
+
+This should fail with "Operation timed out" after 5 seconds.
+
+```bash
+kubectl exec deployment/frontend -- curl -m 5 http://backend
+```
+
+This should work and return HTML content.
+
+### Step 2: Test Layer 7 Limitations
+
+NetworkPolicies only control IP/port. Test what they cannot see at Layer 7.
+
+```bash
+echo "Testing dangerous HTTP operations that NetworkPolicy can't block:"
+kubectl exec deployment/frontend -- curl -X DELETE http://backend/admin/users
+kubectl exec deployment/frontend -- curl -X POST -d "malicious=data" http://backend/sensitive-api
+
+echo "Testing requests with fake tokens that NetworkPolicy can't validate:"
+kubectl exec deployment/frontend -- curl -H "Authorization: Bearer fake-token" http://backend
+kubectl exec deployment/frontend -- curl -H "X-Admin-Secret: hacked" http://backend
+```
+
+### Step 3: Demonstrate Lack of Audit Trail
+
+```bash
+kubectl logs deployment/backend
+```
+
+#### Verify: Show Plaintext Communication
+
+```bash
+kubectl exec deployment/frontend -- curl -v http://backend 2>&1 | grep -E "(GET|Host|User-Agent)"
+```
+
+### Step 4: Show Identity Drift Problem
+
+```bash
+kubectl scale deployment frontend --replicas=0
+kubectl scale deployment frontend --replicas=1
+kubectl exec deployment/frontend -- curl http://backend
+```
+
+The new frontend pod gets the same label but a different IP. Policy still works, but there's no cryptographic identity.
+
+#### Reflection Questions
+- What types of policies can NetworkPolicies enforce?
+- What security controls are impossible with NetworkPolicies alone?
+- How would you audit what requests were allowed or denied?
 
 **Limitations you discovered:**
 - NetworkPolicies work at **Layer 3/4** (IP addresses and ports) - can't see HTTP methods, paths, or headers
@@ -227,24 +340,6 @@ kubectl logs deployment/backend
 - No **identity-based** access - relies on pod labels (can drift during auto-scaling)
 - No **encryption** of traffic - all communication is plaintext
 - No **audit trail** - can't see who was denied access or why
-
-```bash
-# Let's prove the plaintext issue with packet capture
-kubectl run tcpdump --image=nicolaka/netshoot --rm -it -- /bin/bash
-# Inside tcpdump pod:
-# tcpdump -i any -A "host backend.default.svc.cluster.local and port 80" &
-# curl http://backend/
-# You can see HTTP headers in plaintext in the packet capture
-
-# Alternative: Show plaintext in verbose curl
-kubectl exec deployment/frontend -- curl -v http://backend 2>&1 | grep -E "(GET|Host|User-Agent)"
-# HTTP headers visible in logs = plaintext communication
-
-# Show the identity drift problem
-kubectl scale deployment frontend --replicas=0
-kubectl scale deployment frontend --replicas=1
-# New frontend pod gets same label but different IP - policy still works, but no cryptographic identity
-```
 
 **Platform team response**: *"Actually, Cilium NetworkPolicy supports L7 - HTTP methods, paths, even Kafka topics. And we can use cert-manager + SPIRE for automatic mTLS certificates."*
 
@@ -286,46 +381,60 @@ kubectl scale deployment frontend --replicas=1
 
 Now let's see what changes when we add Istio to solve Sarah's problems.
 
-### Exercise 5: Adding Service Mesh
+## Exercise 5: Adding Service Mesh
+
+### Step 1: Install Istio
 
 ```bash
-# Install Istio
 make istio-sidecar
+```
 
-# Redeploy applications with sidecar injection
+### Step 2: Enable Sidecar Injection
+
+```bash
 kubectl label namespace default istio-injection=enabled
 kubectl rollout restart deployment frontend backend
+```
 
-# Check what changed
+#### Verify: Check Sidecar Injection
+
+```bash
 kubectl get pods -o wide
 kubectl describe pod $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
 ```
+
+#### Reflection Questions
+- How many containers does each pod have now?
+- What changed about your application code?
 
 **What you're seeing:**
 - Each pod now has **two containers**: your app + istio-proxy (Envoy)
 - The proxy handles **all network traffic** for your application
 - Your application code **didn't change**
 
-### Exercise 6: Automatic Security
+## Exercise 6: Automatic Security
+
+### Step 1: Enable Strict mTLS
 
 ```bash
-# Enable strict mTLS (mutual TLS)
-kubectl apply -f - <<EOF
-apiVersion: security.istio.io/v1beta1
-kind: PeerAuthentication
-metadata:
-  name: default
-spec:
-  mtls:
-    mode: STRICT
-EOF
-
-# Test connectivity - still works!
-kubectl exec deployment/frontend -- curl http://backend
-
-# But now it's encrypted with automatic certificates
-istioctl authn tls-check backend.default.svc.cluster.local
+make mtls-strict
 ```
+
+#### Verify: Test Encrypted Connectivity
+
+```bash
+kubectl exec deployment/frontend -- curl http://backend
+```
+
+The request still works, but now it's encrypted with automatic certificates.
+
+```bash
+istioctl proxy-config clusters $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}') --fqdn backend.default.svc.cluster.local --direction outbound
+```
+
+#### Reflection Questions
+- Did your application code change to support mTLS?
+- How are certificates managed and rotated?
 
 **Platform team response**: *"We could achieve this with cert-manager + SPIRE injecting mTLS certs into workloads."*
 
@@ -337,10 +446,13 @@ istioctl authn tls-check backend.default.svc.cluster.local
 
 **Sarah's perspective**: "All my service traffic is now encrypted without any code changes AND my ops team manages it from one control plane!"
 
-### Exercise 7: Rich Authorization Policies
+## Exercise 7: Rich Authorization Policies
+
+### Step 1: Implement Layer 7 Policies
+
+Create fine-grained authorization policies that NetworkPolicies cannot enforce.
 
 ```bash
-# Implement "only GET requests to /status allowed"
 kubectl apply -f - <<EOF
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -357,13 +469,22 @@ spec:
     to:
     - operation:
         methods: ["GET"]
-        paths: ["/status"]
+        paths: ["/"]
 EOF
-
-# Test different requests
-kubectl exec deployment/frontend -- curl http://backend/status  # Should work
-kubectl exec deployment/frontend -- curl -X POST http://backend/data  # Should fail
 ```
+
+#### Verify: Test Different Request Types
+
+```bash
+kubectl exec deployment/frontend -- curl http://backend/
+kubectl exec deployment/frontend -- curl -X POST http://backend/data
+```
+
+The GET request should work, the POST should fail with RBAC denied.
+
+#### Reflection Questions
+- What types of policies can you now enforce that NetworkPolicies cannot?
+- How does identity-based authorization differ from IP-based authorization?
 
 **Platform team response**: *"OPA Gatekeeper can validate admission policies, and Cilium NetworkPolicy supports HTTP methods and paths."*
 
@@ -375,24 +496,34 @@ kubectl exec deployment/frontend -- curl -X POST http://backend/data  # Should f
 
 **Sarah's perspective**: "Now I have fine-grained, identity-based access control with unified policy language and audit trails!"
 
-### Exercise 8: Instant Observability
+## Exercise 8: Instant Observability
+
+### Step 1: Open Service Mesh Dashboard
 
 ```bash
-# Open Kiali to see service topology
 make kiali
+```
 
-# Generate some traffic
+### Step 2: Generate Traffic
+
+```bash
 for i in {1..20}; do
-  kubectl exec deployment/frontend -- curl http://backend/status
+  kubectl exec deployment/frontend -- curl http://backend/
   sleep 1
 done
-
-# In Kiali, you can now see:
-# - Service dependency graph
-# - Real-time traffic flow
-# - Success/error rates
-# - Response times
 ```
+
+#### Verify: Check Kiali Dashboard
+
+In the Kiali UI, you can now see:
+- Service dependency graph
+- Real-time traffic flow
+- Success/error rates
+- Response times
+
+#### Reflection Questions
+- What visibility do you have now that was missing before?
+- How does this help with troubleshooting and security auditing?
 
 **Platform team response**: *"We can build service topology with Prometheus service discovery and Jaeger traces."*
 
@@ -415,12 +546,8 @@ Now practice explaining what you just learned to Sarah.
 *"Istio adds a proxy to each service that handles security transparently. Your developers don't change any code, but you get enterprise-grade security."*
 
 ### The Demo
-```bash
-# Show the before/after
-# Before: Plaintext communication, no policies
-# After: Encrypted communication, fine-grained policies
 
-# Show the audit trail
+```bash
 kubectl logs $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}') -c istio-proxy | grep backend
 ```
 
@@ -461,22 +588,32 @@ kubectl logs $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.
 
 ## Troubleshooting Guide
 
-### Pods not starting after Istio installation
+#### If pods not starting after Istio installation:
 ```bash
 kubectl describe pod <pod-name>
 kubectl logs <pod-name> -c istio-init
 ```
 
-### mTLS connectivity issues
+#### If mTLS connectivity issues:
 ```bash
-istioctl authn tls-check <service>.<namespace>.svc.cluster.local
+istioctl proxy-config clusters <pod-name> --fqdn <service>.<namespace>.svc.cluster.local --direction outbound
 kubectl logs <pod-name> -c istio-proxy | grep TLS
 ```
 
-### Authorization policies not working
+#### If authorization policies not working:
 ```bash
 istioctl analyze
 kubectl logs <pod-name> -c istio-proxy | grep RBAC
+```
+
+## Cleanup
+
+```bash
+kubectl delete authorizationpolicy backend-authz
+kubectl delete networkpolicy backend-policy
+kubectl delete deployment frontend backend
+kubectl delete service frontend backend
+kubectl delete pod --all
 ```
 
 ## Next Steps

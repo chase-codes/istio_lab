@@ -1,0 +1,32 @@
+.module-navigator {
+  display: flex;
+  align-items: center;
+}
+
+.module-select {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  min-width: 250px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.module-select:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.module-select:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.module-select option {
+  background: white;
+  color: #333;
+  padding: 0.5rem;
+}

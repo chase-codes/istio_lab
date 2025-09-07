@@ -41,40 +41,84 @@ Let's deeply understand both approaches so you can guide customers like Jennifer
 - **IPAM**: Works with Azure CNI, may need configuration with custom CNIs
 
 ### Lab Setup
+
 ```bash
-# Start with clean environment for comparison
 make kind-down
 make kind-up
+```
 
-# Deploy diverse workload types to simulate Jennifer's environment
-kubectl create deployment latency-sensitive --image=nginx --replicas=3
-kubectl create deployment high-throughput --image=httpd --replicas=5  
+## Exercise 1: Deploy Jennifer's Diverse Workloads
+
+### Step 1: Create Workload Types
+
+Deploy different application types to simulate Jennifer's diverse platform environment.
+
+```bash
+kubectl create deployment latency-sensitive --image=nginxdemos/hello --replicas=3
+kubectl create deployment high-throughput --image=nginxdemos/hello --replicas=5  
 kubectl create deployment legacy-app --image=tomcat:9 --replicas=2
 kubectl create deployment cloud-native --image=nginx:alpine --replicas=4
+```
 
+### Step 2: Expose Services
+
+```bash
 kubectl expose deployment latency-sensitive --port=80
 kubectl expose deployment high-throughput --port=80
 kubectl expose deployment legacy-app --port=8080
 kubectl expose deployment cloud-native --port=80
 ```
 
-### Exercise 1: Sidecar Architecture Deep Dive
+#### Verify: Check Workload Deployment
 
 ```bash
-# Install sidecar-based Istio
-make istio-sidecar
+kubectl get pods -o wide
+kubectl get services
+```
 
-# Enable injection for our workloads
+You should see 14 pods total across 4 different workload types.
+
+#### Reflection Questions
+- How do these workloads differ in their requirements?
+- What are the resource and performance implications of each type?
+
+## Exercise 2: Sidecar Architecture Deep Dive
+
+### Step 1: Install Sidecar-Based Istio
+
+```bash
+make istio-sidecar
+```
+
+### Step 2: Enable Sidecar Injection
+
+```bash
 kubectl label namespace default istio-injection=enabled
 kubectl rollout restart deployment latency-sensitive high-throughput legacy-app cloud-native
+```
 
-# Wait for rollout
-kubectl rollout status deployment latency-sensitive high-throughput legacy-app cloud-native
+### Step 3: Wait for Rollout Completion
 
-# Examine sidecar architecture
+```bash
+kubectl rollout status deployment latency-sensitive
+kubectl rollout status deployment high-throughput
+kubectl rollout status deployment legacy-app
+kubectl rollout status deployment cloud-native
+```
+
+#### Verify: Examine Sidecar Architecture
+
+```bash
 kubectl get pods -o wide
 kubectl describe pod $(kubectl get pod -l app=latency-sensitive -o jsonpath='{.items[0].metadata.name}')
 ```
+
+Each pod should now have 2 containers: the application and istio-proxy.
+
+#### Reflection Questions
+- How many total containers are running now?
+- What's the resource overhead per pod?
+- How does this scale with Jennifer's 120+ microservices?
 
 **What Jennifer sees with sidecars:**
 - **Per-pod proxy**: Each workload gets its own Envoy instance
@@ -82,28 +126,38 @@ kubectl describe pod $(kubectl get pod -l app=latency-sensitive -o jsonpath='{.i
 - **Full feature set**: L7 capabilities available immediately
 - **Familiar pattern**: Similar to traditional proxy deployments
 
-### Exercise 2: Measuring Sidecar Overhead
+## Exercise 3: Measure Sidecar Overhead
+
+### Step 1: Check Resource Usage
 
 ```bash
-# Measure resource usage with sidecars
 kubectl top pods | grep -E "(latency-sensitive|high-throughput|legacy-app|cloud-native)"
-
-# Get detailed resource consumption
-kubectl get pods -o json | jq -r '.items[] | select(.metadata.labels.app) | "\(.metadata.labels.app): \(.status.containerStatuses[] | select(.name=="istio-proxy") | .restartCount) \(.spec.containers[] | select(.name=="istio-proxy") | .resources)"'
-
-# Performance testing methodology
-kubectl run perf-baseline --image=fortio/fortio --rm -it -- load -qps 100 -t 30s -c 10 http://latency-sensitive/
-# Record P50, P90, P99 latency and QPS achieved
-
-# Test with different load patterns
-kubectl run perf-burst --image=fortio/fortio --rm -it -- load -qps 1000 -t 10s -c 20 http://high-throughput/
-# Compare CPU/memory usage before and after
-
-# Small delta interpretation guide:
-# - <2ms P99 latency increase: Negligible for most workloads
-# - <5% CPU overhead: Acceptable for business value gained
-# - <100MB memory per sidecar: Typical baseline overhead
 ```
+
+### Step 2: Performance Baseline Testing
+
+```bash
+kubectl run perf-baseline --image=fortio/fortio --rm -it -- load -qps 100 -t 30s -c 10 http://latency-sensitive/
+```
+
+Record the P50, P90, P99 latency values from the output.
+
+### Step 3: Test High-Throughput Workloads
+
+```bash
+kubectl run perf-burst --image=fortio/fortio --rm -it -- load -qps 1000 -t 10s -c 20 http://high-throughput/
+```
+
+#### Verify: Resource Consumption Analysis
+
+```bash
+kubectl get pods -o json | jq -r '.items[] | select(.metadata.labels.app) | "\(.metadata.labels.app): \(.spec.containers[] | select(.name=="istio-proxy") | .resources)"'
+```
+
+#### Reflection Questions
+- What's the memory overhead per sidecar?
+- How does CPU usage scale under load?
+- What's the latency impact for latency-sensitive workloads?
 
 **Performance measurements Jennifer needs:**
 - **Memory overhead**: ~50MB per sidecar (baseline)
@@ -111,28 +165,43 @@ kubectl run perf-burst --image=fortio/fortio --rm -it -- load -qps 1000 -t 10s -
 - **Latency impact**: Typically 0.5-2ms additional latency
 - **Network overhead**: Minimal for most workloads
 
-### Exercise 3: Ambient Architecture Deep Dive
+## Exercise 4: Ambient Architecture Deep Dive
+
+### Step 1: Clean Up Sidecar Installation
 
 ```bash
-# Clean up sidecar installation
 make cleanup
 kubectl delete namespace istio-system --ignore-not-found
 kubectl label namespace default istio-injection-
+```
 
-# Install ambient mode
+### Step 2: Install Ambient Mode
+
+```bash
 make istio-ambient
+```
 
-# Move workloads to ambient data plane  
+### Step 3: Enable Ambient Data Plane
+
+```bash
 kubectl label namespace default istio.io/dataplane-mode=ambient
-
-# Redeploy applications (no sidecars this time)
 kubectl rollout restart deployment latency-sensitive high-throughput legacy-app cloud-native
+```
 
-# Examine ambient architecture
+#### Verify: Examine Ambient Architecture
+
+```bash
 kubectl get pods -o wide
 kubectl -n istio-system get daemonset ztunnel
 kubectl -n istio-system get pods -l app=ztunnel
 ```
+
+Notice that pods now have only 1 container (no sidecars).
+
+#### Reflection Questions
+- How many containers per pod now?
+- Where is the networking functionality provided?
+- What's the resource distribution across the cluster?
 
 **What Jennifer sees with ambient:**
 - **No sidecars**: Applications run with original container count
@@ -140,35 +209,64 @@ kubectl -n istio-system get pods -l app=ztunnel
 - **Optional L7**: Waypoint proxies deployed per-service as needed
 - **Resource efficiency**: Shared proxy infrastructure
 
-### Exercise 4: Measuring Ambient Efficiency
+## Exercise 5: Measure Ambient Efficiency
+
+### Step 1: Compare Resource Usage
 
 ```bash
-# Compare resource usage (no per-pod sidecars)
 kubectl top pods | grep -E "(latency-sensitive|high-throughput|legacy-app|cloud-native)"
+```
 
-# Check ztunnel resource usage across nodes
+Compare with the sidecar measurements from Exercise 3.
+
+### Step 2: Check Ztunnel Resource Usage
+
+```bash
 kubectl -n istio-system top pods -l app=ztunnel
+```
 
-# Test basic connectivity and mTLS
+### Step 3: Test Basic Connectivity
+
+```bash
 kubectl run ambient-test --image=curlimages/curl --rm -it -- sh
-# Inside container:
+```
+
+Inside the container:
+
+```bash
 curl http://latency-sensitive/
 curl http://high-throughput/
-
-# Verify mTLS is working
-istioctl authn tls-check latency-sensitive.default.svc.cluster.local
+exit
 ```
+
+#### Verify: mTLS Functionality
+
+```bash
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+```
+
+Inside debug pod:
+
+```bash
+istioctl proxy-config clusters $(hostname) --fqdn latency-sensitive.default.svc.cluster.local --direction outbound
+exit
+```
+
+#### Reflection Questions
+- How does resource usage compare to sidecar mode?
+- What's the trade-off in terms of features available?
+- How does this scale across Jennifer's node count?
 
 **Resource efficiency Jennifer observes:**
 - **No per-pod overhead**: Applications use original resource requirements
 - **Shared ztunnel**: One DaemonSet per node vs per-pod sidecars
 - **Selective L7**: Add waypoints only where needed
 
-### Exercise 5: Adding L7 Capabilities in Ambient
+## Exercise 6: Add L7 Capabilities in Ambient
+
+### Step 1: Deploy Waypoint for L7 Features
 
 ```bash
-# Deploy waypoint for services that need L7 features
-# Note: Waypoint APIs are evolving - check latest Istio docs for your version
 kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
@@ -183,8 +281,11 @@ spec:
     port: 15008
     protocol: HSTS
 EOF
+```
 
-# Apply L7 policy to cloud-native service
+### Step 2: Apply L7 Policy
+
+```bash
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -204,22 +305,44 @@ spec:
   - route:
     - destination: {host: cloud-native}
 EOF
-
-# Test L7 functionality
-curl -H "version: v2" http://cloud-native/ -v
 ```
+
+### Step 3: Test L7 Functionality
+
+```bash
+kubectl run l7-test --image=curlimages/curl --rm -it -- sh
+```
+
+Inside the container:
+
+```bash
+curl -H "version: v2" http://cloud-native/ -v
+curl http://cloud-native/ -v
+exit
+```
+
+#### Verify: Waypoint Deployment
+
+```bash
+kubectl get gateway cloud-native-waypoint
+kubectl -n istio-system get pods -l gateway.networking.k8s.io/gateway-name=cloud-native-waypoint
+```
+
+#### Reflection Questions
+- Which services need L7 capabilities in Jennifer's environment?
+- How does selective L7 deployment affect resource usage?
+- What's the operational complexity difference?
 
 **Jennifer's L7 decision framework:**
 - **L4 + mTLS**: Use ambient mode (ztunnel only)
 - **L7 policies needed**: Add waypoint for specific services
 - **Gradual adoption**: Start L4, add L7 capabilities incrementally
 
-## Architecture Decision Framework
+## Exercise 7: Workload Analysis and Recommendations
 
-### Exercise 6: Workload Analysis
+### Step 1: Create Decision Matrix
 
 ```bash
-# Create Jennifer's decision matrix
 cat > workload-analysis.md << EOF
 ## Workload Architecture Recommendations
 
@@ -265,14 +388,11 @@ cat > workload-analysis.md << EOF
 - Sidecar: Immediate L7 features
 - Ambient: Start L4, add waypoints as needed
 EOF
-
-cat workload-analysis.md
 ```
 
-### Exercise 7: Cost-Benefit Analysis
+### Step 2: Calculate Platform Costs
 
 ```bash
-# Calculate Jennifer's platform costs
 cat > platform-costs.md << EOF
 ## Jennifer's Platform: Cost Analysis
 
@@ -305,14 +425,26 @@ cat > platform-costs.md << EOF
 
 **ROI: 87% cost reduction with ambient architecture**
 EOF
+```
 
+#### Verify: Review Analysis
+
+```bash
+cat workload-analysis.md
+echo "---"
 cat platform-costs.md
 ```
 
-### Exercise 8: Migration Strategy Planning
+#### Reflection Questions
+- How do these recommendations apply to Jennifer's specific workloads?
+- What are the long-term operational implications?
+- How does this analysis change with different scale assumptions?
+
+## Exercise 8: Migration Strategy Planning
+
+### Step 1: Define Phased Approach
 
 ```bash
-# Show Jennifer's phased adoption approach
 cat > migration-strategy.md << EOF
 ## Platform Migration Strategy
 
@@ -346,20 +478,11 @@ cat > migration-strategy.md << EOF
 - Maintained or improved performance
 - Increased platform team productivity
 EOF
-
-cat migration-strategy.md
 ```
 
-## Customer Application: Guiding Jennifer's Decision
+### Step 2: Create Decision Framework
 
-Practice being Jennifer's trusted advisor for this critical architectural choice.
-
-### The Platform Engineering Perspective
-*"Jennifer, choosing the right data plane architecture affects your platform for years. Let me show you how to make this decision based on your actual workload characteristics..."*
-
-### Decision Framework Presentation
 ```bash
-# Show the decision tree
 cat > decision-framework.md << EOF
 ## Service Mesh Data Plane Decision Framework
 
@@ -389,39 +512,72 @@ cat > decision-framework.md << EOF
 - 15% need full L7 features (cloud-native apps)
 - Platform team wants operational simplicity
 EOF
+```
 
+#### Verify: Review Strategy
+
+```bash
+cat migration-strategy.md
+echo "---"
 cat decision-framework.md
 ```
 
-### Demo Script for Platform Team
+#### Reflection Questions
+- How does this migration approach minimize risk?
+- What success metrics matter most for Jennifer's platform?
+- How would you adapt this strategy for different organizational contexts?
+
+## Exercise 9: Hybrid Deployments
+
+### Step 1: Create Different Namespace Configurations
+
 ```bash
-# 1. Show resource comparison (10 minutes)
-kubectl top pods | head -20
-kubectl -n istio-system top pods -l app=ztunnel
-
-# 2. Show L7 flexibility (10 minutes)  
-# "You can add waypoints selectively for services that need L7 features"
-kubectl get gateway cloud-native-waypoint
-curl -H "version: v2" http://cloud-native/ -v
-
-# 3. Show migration path (10 minutes)
-# "Start with L4 for all services, add L7 incrementally"
+kubectl create namespace sidecar-workloads
+kubectl create namespace ambient-workloads
+kubectl label namespace sidecar-workloads istio-injection=enabled
+kubectl label namespace ambient-workloads istio.io/dataplane-mode=ambient
 ```
 
-### Handling Platform Team Concerns
+### Step 2: Deploy Same Application in Both Modes
 
-**"Is ambient production-ready?"**
-- *"Ambient graduated to stable in Istio 1.22. Companies like Solo.io and Tetrate are running it in production. The L4 layer (ztunnel) is simpler and more stable than full L7 sidecars."*
+```bash
+kubectl -n sidecar-workloads create deployment test-app --image=nginxdemos/hello
+kubectl -n ambient-workloads create deployment test-app --image=nginxdemos/hello
+kubectl -n sidecar-workloads expose deployment test-app --port=80
+kubectl -n ambient-workloads expose deployment test-app --port=80
+```
 
-**"What if we need to migrate from ambient to sidecar later?"**
-- *"Both use the same control plane and APIs. Migration is changing a namespace label and restarting pods. You're not locked into either choice."*
+#### Verify: Compare Resource Usage
 
-**"How do we train teams on ambient concepts?"**
-- *"Ambient is actually simpler for developers - they see fewer containers and less configuration. The complexity is hidden in the platform layer where your team manages it."*
+```bash
+kubectl get pods -A -o wide | grep test-app
+kubectl top pods -A | grep test-app
+```
+
+#### Reflection Questions
+- How do resource patterns differ between the two modes?
+- What operational considerations exist for hybrid deployments?
+- When would you recommend this approach to customers?
+
+## Customer Application: Guiding Jennifer's Decision
+
+Practice being Jennifer's trusted advisor for this critical architectural choice.
+
+### The Platform Engineering Perspective
+*"Jennifer, choosing the right data plane architecture affects your platform for years. Let me show you how to make this decision based on your actual workload characteristics..."*
+
+### Demo Script for Platform Team
+
+```bash
+kubectl top pods | head -20
+kubectl -n istio-system top pods -l app=ztunnel
+kubectl get gateway cloud-native-waypoint
+kubectl run demo-test --image=curlimages/curl --rm -it -- curl -H "version: v2" http://cloud-native.default.svc.cluster.local/ -v
+```
 
 ### ROI Presentation for Leadership
+
 ```bash
-# Show the business case
 cat > business-case.md << EOF
 ## Business Case: Ambient Architecture Choice
 
@@ -444,42 +600,18 @@ cat > business-case.md << EOF
 **Implementation Cost: $50,000 (training + migration)**
 **ROI: 536% first year**
 EOF
-
-cat business-case.md
 ```
 
-## Advanced Architecture Concepts
+### Handling Platform Team Concerns
 
-### Exercise 9: Hybrid Deployments
+**"Is ambient production-ready?"**
+- *"Ambient graduated to stable in Istio 1.22. Companies like Solo.io and Tetrate are running it in production. The L4 layer (ztunnel) is simpler and more stable than full L7 sidecars."*
 
-```bash
-# Show how Jennifer can run both modes in different namespaces
-kubectl create namespace sidecar-workloads
-kubectl create namespace ambient-workloads
+**"What if we need to migrate from ambient to sidecar later?"**
+- *"Both use the same control plane and APIs. Migration is changing a namespace label and restarting pods. You're not locked into either choice."*
 
-kubectl label namespace sidecar-workloads istio-injection=enabled
-kubectl label namespace ambient-workloads istio.io/dataplane-mode=ambient
-
-# Deploy same app in both modes
-kubectl -n sidecar-workloads create deployment test-app --image=nginx
-kubectl -n ambient-workloads create deployment test-app --image=nginx
-
-# Compare resource usage
-kubectl top pods -A | grep test-app
-```
-
-### Exercise 10: Performance Benchmarking
-
-```bash
-# Set up performance testing
-kubectl run perf-test --image=fortio/fortio --rm -it -- load -qps 100 -t 30s -c 10 http://latency-sensitive/
-
-# Measure latency distribution
-kubectl logs perf-test | grep "Response time histogram"
-
-# Compare ambient vs sidecar performance metrics
-# (This would show Jennifer concrete performance data for her decision)
-```
+**"How do we train teams on ambient concepts?"**
+- *"Ambient is actually simpler for developers - they see fewer containers and less configuration. The complexity is hidden in the platform layer where your team manages it."*
 
 ## Key Takeaways
 
@@ -502,33 +634,35 @@ kubectl logs perf-test | grep "Response time histogram"
 
 ## Troubleshooting Guide
 
-### Ambient mode not working
+#### If ambient mode not working:
 ```bash
-# Check ztunnel status
 kubectl -n istio-system get pods -l app=ztunnel
 kubectl -n istio-system logs daemonset/ztunnel
-
-# Verify namespace labels
 kubectl get namespace default -o yaml | grep labels
 ```
 
-### Waypoint proxy issues
+#### If waypoint proxy issues:
 ```bash
-# Check waypoint deployment
 kubectl get gateway cloud-native-waypoint
 kubectl -n istio-system get pods -l gateway.networking.k8s.io/gateway-name=cloud-native-waypoint
-
-# Verify L7 policies
 istioctl analyze
 ```
 
-### Performance debugging
+#### If performance debugging needed:
 ```bash
-# Check ztunnel resource usage
 kubectl -n istio-system top pods -l app=ztunnel
+kubectl run perf-debug --image=fortio/fortio --rm -it -- load -qps 10 -t 10s http://latency-sensitive/
+```
 
-# Monitor application latency
-kubectl exec -it perf-test -- fortio load -qps 10 -t 10s http://latency-sensitive/
+## Cleanup
+
+```bash
+kubectl delete namespace sidecar-workloads ambient-workloads
+kubectl delete gateway cloud-native-waypoint
+kubectl delete virtualservice cloud-native-routing
+kubectl delete deployment latency-sensitive high-throughput legacy-app cloud-native
+kubectl delete service latency-sensitive high-throughput legacy-app cloud-native
+rm -f workload-analysis.md platform-costs.md migration-strategy.md decision-framework.md business-case.md
 ```
 
 ## Next Steps

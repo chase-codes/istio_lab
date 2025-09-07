@@ -17,8 +17,35 @@ You'll understand both **what** the technology does and **why** customers care a
 
 ### **Start Here: Prerequisites**
 1. **System Requirements**: macOS with Docker Desktop, 8GB+ RAM available
-2. **Time Investment**: 8-16 hours total (1-2 hours per module)
+2. **Time Investment**: 16-24 hours total (2-3 hours per module)
 3. **Background**: Basic Kubernetes knowledge helpful but not required
+
+### **Choose Your Learning Experience**
+
+#### **🖥️ Modern Desktop App (Recommended)**
+For the best learning experience with rich formatting, copyable code blocks, and integrated terminal:
+
+```bash
+# Launch the modern Electron-based learning app
+./launch-lab-app.sh
+```
+
+**Features:**
+- ✨ Rich markdown rendering with syntax highlighting
+- 📋 Copyable code blocks with one click
+- 🖥️ Integrated terminal for hands-on labs
+- 🎨 Beautiful UI with split-pane layout
+- 🔄 Hot reload during development
+
+#### **🖥️ Traditional Terminal Experience**
+For the original tmux-based experience:
+
+```bash
+# Start the traditional tmux learning session
+./bin/start_learning_session.sh
+```
+
+Both approaches use the same content and labs - choose based on your preference!
 
 ### **The Learning Path**
 This lab is designed as a **progressive journey** - each module builds on the previous one:
@@ -104,7 +131,7 @@ Every module follows the same proven pattern:
 
 ### **Step 1: Set Up Optimal Learning Environment**
 ```bash
-cd /Users/chase/repos/istio_lab
+cd /path/to/your/istio_lab
 ./bin/setup_learning_environment.sh
 ```
 This installs tools and sets up a split-screen terminal for the best learning experience.

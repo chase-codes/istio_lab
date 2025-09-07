@@ -45,11 +45,16 @@ Understanding enterprise-scale deployment patterns is crucial for large customer
 **Note**: Kind-based multi-cluster is a simulation. Production requires real network connectivity.
 
 ### Lab Setup
-```bash
-# Create multiple clusters to simulate Sarah's global deployment
-make kind-down
 
-# Cluster 1: US East (Primary)
+```bash
+make kind-down
+```
+
+## Exercise 1: Create Multi-Cluster Environment
+
+### Step 1: Create US East Cluster (Primary)
+
+```bash
 kind create cluster --name us-east --config - <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -66,8 +71,11 @@ nodes:
       podSubnet: "10.244.0.0/16"
 - role: worker
 EOF
+```
 
-# Cluster 2: EU West (Secondary)  
+### Step 2: Create EU West Cluster (Secondary)
+
+```bash
 kind create cluster --name eu-west --config - <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -84,684 +92,539 @@ nodes:
       podSubnet: "10.245.0.0/16"
 - role: worker
 EOF
+```
 
-# Set up contexts
+### Step 3: Set Up Cluster Contexts
+
+```bash
 kubectl config use-context kind-us-east
 kubectl config rename-context kind-us-east us-east
 kubectl config use-context kind-eu-west  
 kubectl config rename-context kind-eu-west eu-west
 ```
 
-### Exercise 1: Single-Cluster Foundation
+#### Verify: Multi-Cluster Setup
 
 ```bash
-# Start with US East cluster
-kubectl config use-context us-east
+kubectl config get-contexts
+kubectl config use-context us-east && kubectl get nodes
+kubectl config use-context eu-west && kubectl get nodes
+```
 
-# Install Istio in primary cluster
+You should see two separate Kubernetes clusters.
+
+#### Reflection Questions
+- How does multi-cluster deployment address regulatory requirements?
+- What are the network connectivity challenges?
+- How would you manage policies across multiple clusters?
+
+## Exercise 2: Install Istio on Primary Cluster
+
+### Step 1: Install Istio on US East
+
+```bash
+kubectl config use-context us-east
 curl -L https://istio.io/downloadIstio | sh -
 export PATH=$PWD/istio-*/bin:$PATH
-
-istioctl install --set values.pilot.env.EXTERNAL_ISTIOD=true --set values.global.meshID=mesh1 --set values.global.clusterName=us-east --set values.global.network=us-east-network -y
-
-# Label the cluster
-kubectl label namespace istio-system topology.istio.io/network=us-east-network
-
-# Deploy Sarah's banking services in US East
-kubectl create deployment account-service --image=nginx --replicas=3
-kubectl create deployment transaction-service --image=httpd --replicas=2
-kubectl create deployment fraud-detection --image=nginx:alpine --replicas=2
-
-kubectl expose deployment account-service --port=80
-kubectl expose deployment transaction-service --port=80
-kubectl expose deployment fraud-detection --port=80
-
-# Enable sidecar injection
-kubectl label namespace default istio-injection=enabled
-kubectl rollout restart deployment account-service transaction-service fraud-detection
-
-kubectl rollout status deployment account-service transaction-service fraud-detection
+istioctl install --set meshConfig.trustDomain=megabank.corp --set values.pilot.env.EXTERNAL_ISTIOD=true -y
 ```
 
-### Exercise 2: Installing Secondary Cluster
+### Step 2: Deploy Sample Application
 
 ```bash
-# Switch to EU West cluster
+kubectl label namespace default istio-injection=enabled
+kubectl create deployment frontend --image=nginxdemos/hello --replicas=2
+kubectl create deployment backend --image=nginxdemos/hello --replicas=2
+kubectl expose deployment frontend --port=80
+kubectl expose deployment backend --port=80
+```
+
+### Step 3: Enable Cross-Cluster Discovery
+
+```bash
+kubectl create secret generic cacerts -n istio-system \
+  --from-file=root-cert.pem=istio-*/samples/certs/root-cert.pem \
+  --from-file=cert-chain.pem=istio-*/samples/certs/cert-chain.pem \
+  --from-file=ca-cert.pem=istio-*/samples/certs/ca-cert.pem \
+  --from-file=ca-key.pem=istio-*/samples/certs/ca-key.pem
+kubectl rollout restart deployment/istiod -n istio-system
+```
+
+#### Verify: Primary Cluster Setup
+
+```bash
+kubectl get pods -n istio-system
+kubectl get pods -n default
+```
+
+#### Reflection Questions
+- Why is external Istiod required for multi-cluster?
+- How does trust domain configuration affect security?
+- What's the role of certificate management across clusters?
+
+## Exercise 3: Install Istio on Remote Cluster
+
+### Step 1: Install Istio on EU West
+
+```bash
 kubectl config use-context eu-west
-
-# Install Istio as remote cluster
-export DISCOVERY_ADDRESS=$(kubectl --context=us-east -n istio-system get svc istio-pilot -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-# For kind clusters, use port-forward instead:
-kubectl --context=us-east -n istio-system port-forward svc/istiod 15010:15010 &
-export DISCOVERY_ADDRESS=127.0.0.1:15010
-
-# Install remote cluster configuration
-istioctl install --set istiodRemote.enabled=true --set pilot.env.EXTERNAL_ISTIOD=true --set global.remotePilotAddress=${DISCOVERY_ADDRESS} --set values.global.meshID=mesh1 --set values.global.clusterName=eu-west --set values.global.network=eu-west-network -y
-
-# Label the cluster
-kubectl label namespace istio-system topology.istio.io/network=eu-west-network
-
-# Deploy Sarah's EU-specific services (GDPR compliant)
-kubectl create deployment eu-user-data --image=nginx --replicas=2
-kubectl create deployment eu-analytics --image=httpd --replicas=2
-
-kubectl expose deployment eu-user-data --port=80
-kubectl expose deployment eu-analytics --port=80
-
-# Enable sidecar injection
-kubectl label namespace default istio-injection=enabled
-kubectl rollout restart deployment eu-user-data eu-analytics
-
-kubectl rollout status deployment eu-user-data eu-analytics
+kubectl create namespace istio-system
+kubectl create secret generic cacerts -n istio-system \
+  --from-file=root-cert.pem=istio-*/samples/certs/root-cert.pem \
+  --from-file=cert-chain.pem=istio-*/samples/certs/cert-chain.pem \
+  --from-file=ca-cert.pem=istio-*/samples/certs/ca-cert.pem \
+  --from-file=ca-key.pem=istio-*/samples/certs/ca-key.pem
 ```
 
-### Exercise 3: Cross-Cluster Service Discovery
+### Step 2: Get Primary Cluster Info
 
 ```bash
-# Enable cross-cluster service discovery
-# Install cross-cluster secret in US East
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: cacerts
-  namespace: istio-system
-  labels:
-    istio/cluster: eu-west
-type: Opaque
-data:
-  cert-chain.pem: $(kubectl --context=eu-west -n istio-system get secret cacerts -o jsonpath='{.data.cert-chain\.pem}')
-  key.pem: $(kubectl --context=eu-west -n istio-system get secret cacerts -o jsonpath='{.data.key\.pem}')
-  root-cert.pem: $(kubectl --context=eu-west -n istio-system get secret cacerts -o jsonpath='{.data.root-cert\.pem}')
-EOF
+kubectl config use-context us-east
+export DISCOVERY_ADDRESS=$(kubectl get svc istio-eastwestgateway -n istio-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
+echo "Discovery address: $DISCOVERY_ADDRESS"
+```
 
-# Create cross-cluster service endpoints
-kubectl --context=us-east apply -f - <<EOF
+### Step 3: Install Remote Istio
+
+```bash
+kubectl config use-context eu-west
+istioctl install --set istiodRemote.enabled=true \
+  --set pilot.env.EXTERNAL_ISTIOD=true \
+  --set global.remotePilotAddress=$DISCOVERY_ADDRESS \
+  --set meshConfig.trustDomain=megabank.corp -y
+```
+
+### Step 4: Deploy Services in EU
+
+```bash
+kubectl label namespace default istio-injection=enabled
+kubectl create deployment eu-backend --image=nginxdemos/hello --replicas=2
+kubectl expose deployment eu-backend --port=80 --name=backend
+```
+
+#### Verify: Remote Cluster Setup
+
+```bash
+kubectl get pods -n istio-system
+kubectl get pods -n default
+```
+
+#### Reflection Questions
+- How does remote Istio connect to primary control plane?
+- What happens if the primary cluster becomes unavailable?
+- How are certificates synchronized across clusters?
+
+## Exercise 4: Cross-Cluster Service Discovery
+
+### Step 1: Create Cross-Cluster Service Entry
+
+```bash
+kubectl config use-context us-east
+kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: ServiceEntry
 metadata:
-  name: eu-services
+  name: eu-backend
 spec:
-  hosts:
-  - eu-user-data.default.global
-  location: MESH_EXTERNAL  
+  hosts: [eu-backend.default.global]
+  location: MESH_EXTERNAL
   ports:
   - number: 80
     name: http
     protocol: HTTP
   resolution: DNS
-  addresses:
-  - 240.0.0.1  # Virtual IP for cross-cluster service
+  addresses: [240.0.0.1]
   endpoints:
-  - address: eu-user-data.default.svc.cluster.local
-    network: eu-west-network
-    ports:
-      http: 80
+  - address: eu-backend.default.svc.cluster.local
+    network: eu-west
 EOF
-
-# Test cross-cluster connectivity
-kubectl --context=us-east exec deployment/account-service -- curl http://eu-user-data.default.global/
 ```
 
-**Sarah's global connectivity**: Services can securely communicate across cluster boundaries
-
-### Exercise 4: Policy Federation
+### Step 2: Test Cross-Cluster Communication
 
 ```bash
-# Apply consistent security policies across clusters
-# Policy 1: mTLS enforcement everywhere
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: security.istio.io/v1beta1
-kind: PeerAuthentication
-metadata:
-  name: global-mtls
-  namespace: istio-system
-spec:
-  mtls:
-    mode: STRICT
-EOF
-
-kubectl --context=eu-west apply -f - <<EOF
-apiVersion: security.istio.io/v1beta1
-kind: PeerAuthentication
-metadata:
-  name: global-mtls
-  namespace: istio-system
-spec:
-  mtls:
-    mode: STRICT
-EOF
-
-# Policy 2: Data residency compliance
-kubectl --context=eu-west apply -f - <<EOF
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: eu-data-residency
-  namespace: default
-spec:
-  selector:
-    matchLabels:
-      app: eu-user-data
-  action: DENY
-  rules:
-  - from:
-    - source:
-        notNamespaces: ["default", "istio-system"]
-  - when:
-    - key: source.cluster
-      notValues: ["eu-west"]
-EOF
-
-# Verify policy enforcement
-kubectl --context=us-east exec deployment/account-service -- curl http://eu-user-data.default.global/ --timeout=5
-# Should be denied due to compliance policy
+kubectl config use-context us-east
+kubectl exec deployment/frontend -- curl -v http://eu-backend.default.global/
 ```
 
-**Sarah's compliance enforcement**: Policies automatically enforced across global infrastructure
-
-### Exercise 5: Intelligent Global Load Balancing
+#### Verify: Cross-Cluster Connectivity
 
 ```bash
-# Configure locality-aware routing
-kubectl --context=us-east apply -f - <<EOF
+kubectl config use-context us-east
+kubectl get serviceentry eu-backend
+```
+
+#### Reflection Questions
+- How does service discovery work across cluster boundaries?
+- What are the DNS resolution requirements?
+- How would you handle service naming conflicts?
+
+## Exercise 5: Global Load Balancing
+
+### Step 1: Configure Destination Rules
+
+```bash
+kubectl config use-context us-east
+kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
 metadata:
-  name: global-load-balancing
+  name: backend-global
 spec:
-  host: account-service.default.global
+  host: backend
+  subsets:
+  - name: us-east
+    labels:
+      region: us-east
+  - name: eu-west
+    labels:
+      region: eu-west
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: backend-global-routing
+spec:
+  hosts: [backend]
+  http:
+  - match:
+    - headers:
+        region: {exact: "eu"}
+    route:
+    - destination: {host: eu-backend.default.global}
+  - route:
+    - destination: {host: backend, subset: us-east}
+      weight: 70
+    - destination: {host: eu-backend.default.global}
+      weight: 30
+EOF
+```
+
+### Step 2: Test Regional Routing
+
+```bash
+kubectl exec deployment/frontend -- curl -H "region: eu" http://backend/
+kubectl exec deployment/frontend -- curl http://backend/
+```
+
+#### Verify: Traffic Distribution
+
+```bash
+kubectl get virtualservice backend-global-routing -o yaml
+```
+
+#### Reflection Questions
+- How does global load balancing improve user experience?
+- What factors should influence traffic distribution?
+- How would you implement disaster recovery routing?
+
+## Exercise 6: Policy Federation
+
+### Step 1: Apply Consistent Security Policies
+
+```bash
+kubectl config use-context us-east
+kubectl apply -f - <<EOF
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-strict
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: frontend-to-backend
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/default/sa/default"]
+EOF
+```
+
+### Step 2: Apply Same Policies to EU
+
+```bash
+kubectl config use-context eu-west
+kubectl apply -f - <<EOF
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-strict
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: frontend-to-backend
+spec:
+  selector:
+    matchLabels:
+      app: eu-backend
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/default/sa/default"]
+EOF
+```
+
+#### Verify: Policy Consistency
+
+```bash
+kubectl config use-context us-east
+kubectl get peerauthentication,authorizationpolicy
+kubectl config use-context eu-west
+kubectl get peerauthentication,authorizationpolicy
+```
+
+#### Reflection Questions
+- How do you ensure policy consistency across clusters?
+- What tools could automate policy federation?
+- How would you handle policy drift detection?
+
+## Exercise 7: Compliance and Data Residency
+
+### Step 1: Implement Data Residency Controls
+
+```bash
+kubectl config use-context us-east
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: compliance-routing
+spec:
+  hosts: [backend]
+  http:
+  - match:
+    - headers:
+        data-classification: {exact: "eu-only"}
+    route:
+    - destination: {host: eu-backend.default.global}
+  - match:
+    - headers:
+        data-classification: {exact: "us-only"}
+    route:
+    - destination: {host: backend}
+  - route:
+    - destination: {host: backend}
+EOF
+```
+
+### Step 2: Test Compliance Routing
+
+```bash
+kubectl exec deployment/frontend -- curl -H "data-classification: eu-only" http://backend/
+kubectl exec deployment/frontend -- curl -H "data-classification: us-only" http://backend/
+```
+
+#### Verify: Compliance Controls
+
+```bash
+kubectl get virtualservice compliance-routing -o yaml
+```
+
+#### Reflection Questions
+- How does service mesh enforce data residency?
+- What audit trails are available for compliance?
+- How would you handle cross-border data flow restrictions?
+
+## Exercise 8: Disaster Recovery Scenarios
+
+### Step 1: Simulate Primary Cluster Failure
+
+```bash
+kubectl config use-context us-east
+kubectl scale deployment backend --replicas=0
+```
+
+### Step 2: Configure Automatic Failover
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: backend-failover
+spec:
+  host: backend
   trafficPolicy:
     outlierDetection:
       consecutiveErrors: 3
       interval: 30s
       baseEjectionTime: 30s
-    localityLbSetting:
-      enabled: true
-      failover:
-      - from: us-east/*
-        to: eu-west/*
-      - from: eu-west/*  
-        to: us-east/*
-  portLevelSettings:
-  - port:
-      number: 80
-    loadBalancer:
-      localityLbSetting:
-        enabled: true
-EOF
-
-# Configure traffic distribution
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: global-routing
-spec:
-  hosts:
-  - account-service.default.global
-  http:
-  - match:
-    - headers:
-        region: {exact: "us"}
-    route:
-    - destination:
-        host: account-service.default.svc.cluster.local
-      weight: 100
-  - match:
-    - headers:
-        region: {exact: "eu"}
-    route:
-    - destination:
-        host: eu-user-data.default.global  
-      weight: 100
-  - route:  # Default: route to local region
-    - destination:
-        host: account-service.default.svc.cluster.local
-      weight: 100
-EOF
-
-# Test regional routing
-kubectl --context=us-east exec deployment/account-service -- curl -H "region: eu" http://account-service.default.global/
-```
-
-**Sarah's intelligent routing**: Traffic automatically routed to optimal regions
-
-### Exercise 6: Disaster Recovery Setup
-
-```bash
-# Configure automatic failover
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: DestinationRule
-metadata:
-  name: disaster-recovery
-spec:
-  host: transaction-service.default.global
-  trafficPolicy:
-    outlierDetection:
-      consecutiveErrors: 2
-      interval: 10s
-      baseEjectionTime: 30s
-      maxEjectionPercent: 100  # Allow complete failover
-    localityLbSetting:
-      enabled: true
-      failover:
-      - from: us-east/*
-        to: eu-west/*
-EOF
-
-# Simulate US East failure
-kubectl --context=us-east scale deployment transaction-service --replicas=0
-
-# Test automatic failover
-kubectl --context=us-east exec deployment/account-service -- curl http://transaction-service.default.global/
-# Traffic should automatically route to EU West backup
-```
-
-**Sarah's disaster recovery**: Automatic failover with minimal service disruption
-
-### Exercise 7: Observability Across Clusters
-
-```bash
-# Set up federated monitoring
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: federated-prometheus
-  namespace: istio-system
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 15s
-      external_labels:
-        cluster: 'us-east'
-        region: 'us'
-    
-    scrape_configs:
-    - job_name: 'istio-mesh'
-      kubernetes_sd_configs:
-      - role: endpoints
-        namespaces:
-          names: [istio-system, default]
-    
-    # Federate from EU cluster
-    - job_name: 'federate-eu'
-      scrape_interval: 15s
-      honor_labels: true
-      metrics_path: '/federate'
-      params:
-        'match[]':
-          - '{job=~"kubernetes-.*"}'
-          - '{__name__=~"istio_.*"}'
-      static_configs:
-        - targets: ['prometheus-eu.example.com:9090']
-EOF
-
-# Install Kiali for global service map
-kubectl --context=us-east apply -f https://raw.githubusercontent.com/istio/istio/release-1.22/samples/addons/kiali.yaml
-
-# Configure Kiali for multi-cluster
-kubectl --context=us-east patch configmap kiali -n istio-system --patch '{"data":{"config.yaml":"server:\n  web_root: /kiali\nistio:\n  config_map_name: istio\n  istio_namespace: istio-system\ndeployment:\n  accessible_namespaces: [\"**\"]\nexternal_services:\n  istio:\n    component_status:\n      enabled: true\n      components:\n      - app_label: istiod\n        is_core: true\n        is_proxy: false\n      - app_label: istio-proxy\n        is_core: true\n        is_proxy: true\n"}}'
-```
-
-**Sarah's global visibility**: Single pane of glass for multi-cluster operations
-
-## Enterprise Deployment Patterns
-
-### Exercise 8: Progressive Regional Rollout
-
-```bash
-# Implement canary deployment across regions
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: regional-canary
-spec:
-  hosts:
-  - account-service.default.global
-  http:
-  # EU users get new version first (lower risk region)
-  - match:
-    - headers:
-        geo-region: {exact: "eu"}
-    route:
-    - destination:
-        host: account-service.default.svc.cluster.local
-        subset: v2
-  # US users get stable version initially
-  - match:
-    - headers:
-        geo-region: {exact: "us"}
-    route:
-    - destination:
-        host: account-service.default.svc.cluster.local
-        subset: v1
-  # Default routing
-  - route:
-    - destination:
-        host: account-service.default.svc.cluster.local
-        subset: v1
-      weight: 90
-    - destination:
-        host: account-service.default.svc.cluster.local
-        subset: v2
-      weight: 10
-EOF
-
-# Deploy new version to EU first
-kubectl --context=eu-west set image deployment/eu-user-data nginx=nginx:1.20
-```
-
-**Sarah's risk management**: Deploy to lower-risk regions first, then expand globally
-
-### Exercise 9: Network Segmentation and Security Zones
-
-```bash
-# Create security zones across clusters
-kubectl --context=us-east create namespace dmz
-kubectl --context=us-east create namespace secure-zone
-kubectl --context=eu-west create namespace gdpr-zone
-
-# Configure zone-specific policies
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: dmz-isolation
-  namespace: dmz
-spec:
-  action: DENY
-  rules:
-  - from:
-    - source:
-        namespaces: ["secure-zone"]
-  - to:
-    - operation:
-        methods: ["POST", "PUT", "DELETE"]
 ---
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: secure-zone-access
-  namespace: secure-zone
-spec:
-  action: ALLOW
-  rules:
-  - from:
-    - source:
-        principals: ["cluster.local/ns/dmz/sa/gateway"]
-  - to:
-    - operation:
-        methods: ["GET"]
-EOF
-
-# GDPR zone in EU
-kubectl --context=eu-west apply -f - <<EOF
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: gdpr-compliance
-  namespace: gdpr-zone
-spec:
-  action: DENY
-  rules:
-  - from:
-    - source:
-        notNamespaces: ["gdpr-zone", "istio-system"]
-  - when:
-    - key: source.cluster
-      notValues: ["eu-west"]
-EOF
-```
-
-**Sarah's security boundaries**: Network segmentation enforced across global infrastructure
-
-### Exercise 10: Compliance Automation
-
-```bash
-# Automated compliance monitoring
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: compliance-monitoring
-  namespace: istio-system
-data:
-  compliance-rules.yml: |
-    groups:
-    - name: compliance-sre
-      rules:
-      # EU data residency violation
-      - alert: EUDataResidencyViolation
-        expr: |
-          increase(istio_requests_total{
-            source_cluster!="eu-west",
-            destination_service_name=~".*eu.*",
-            response_code!~"403"
-          }[5m]) > 0
-        labels:
-          severity: critical
-          compliance: gdpr
-        annotations:
-          summary: "EU data accessed from non-EU cluster"
-      
-      # Cross-zone unauthorized access
-      - alert: SecurityZoneViolation
-        expr: |
-          increase(istio_requests_total{
-            destination_service_namespace="secure-zone",
-            source_workload!="gateway",
-            response_code!~"403"
-          }[5m]) > 0
-        labels:
-          severity: critical
-          compliance: security-policy
-        annotations:
-          summary: "Unauthorized access to secure zone"
-      
-      # mTLS enforcement check
-      - alert: mTLSViolation
-        expr: |
-          increase(istio_requests_total{
-            connection_security_policy!="mutual_tls"
-          }[5m]) > 0
-        labels:
-          severity: warning
-          compliance: encryption
-        annotations:
-          summary: "Non-mTLS communication detected"
-EOF
-```
-
-**Sarah's compliance automation**: Continuous monitoring of regulatory requirements
-
-## Customer Application: Enterprise Scale Presentation
-
-Practice presenting Sarah's global service mesh implementation to enterprise leadership.
-
-### The Enterprise Scale Value
-*"Sarah, let me show you how service mesh scales from single cluster to global enterprise deployment while maintaining security and compliance..."*
-
-### Demo Script for Enterprise Leadership
-```bash
-# 1. Show global service connectivity (10 minutes)
-kubectl config use-context us-east
-kubectl exec deployment/account-service -- curl http://eu-user-data.default.global/
-# "Services in US can securely communicate with EU services"
-
-# 2. Demonstrate policy consistency (10 minutes)  
-kubectl --context=us-east get peerauthentication -A
-kubectl --context=eu-west get peerauthentication -A
-# "Same security policies enforced across all regions"
-
-# 3. Show compliance enforcement (10 minutes)
-kubectl --context=us-east exec deployment/account-service -- curl http://eu-user-data.default.global/ --timeout=5
-# "GDPR compliance automatically enforced - US services cannot access EU data"
-
-# 4. Demonstrate disaster recovery (10 minutes)
-kubectl --context=us-east scale deployment transaction-service --replicas=0
-kubectl --context=us-east exec deployment/account-service -- curl http://transaction-service.default.global/
-# "Automatic failover to EU region during US outage"
-
-# 5. Show global observability (5 minutes)
-# Open Kiali showing services across both clusters
-# "Single view of global service health and traffic flow"
-```
-
-### Handling Enterprise Architecture Questions
-
-**"How do we maintain consistency across multiple clusters?"**
-- *"Service mesh provides policy federation and GitOps integration. You define policies once and apply them consistently across all clusters. Configuration drift is automatically detected and corrected."*
-
-**"What about network latency between regions?"**
-- *"Service mesh provides intelligent routing based on latency and locality. Traffic is automatically routed to the closest healthy region. Cross-region communication only happens when necessary for disaster recovery or specific business requirements."*
-
-**"How do we handle regulatory compliance across different jurisdictions?"**
-- *"Service mesh enforces compliance boundaries through automatic policy enforcement. EU data stays in EU clusters, PCI data stays in PCI-compliant zones. Violations are automatically blocked and audited."*
-
-### Enterprise ROI Calculation
-```bash
-cat > enterprise-scale-roi.md << EOF
-## Enterprise Multi-Cluster ROI: MegaBank Corp
-
-### Current Global Operations Costs
-- Manual policy deployment across 4 regions: 80 hours/month × $200 = $16,000
-- Disaster recovery testing and coordination: 40 hours/month × $200 = $8,000
-- Compliance monitoring and reporting: 60 hours/month × $150 = $9,000
-- Cross-region networking and VPN management: $25,000/month
-- Incident response coordination across regions: 30 hours/month × $200 = $6,000
-
-**Current Monthly Cost: $64,000**
-
-### With Multi-Cluster Service Mesh
-- Automated policy federation: $3,200/month (80% reduction)
-- Automated disaster recovery: $1,600/month (80% reduction)  
-- Automated compliance monitoring: $1,800/month (80% reduction)
-- Service mesh networking: $8,000/month (68% reduction)
-- Coordinated incident response: $1,200/month (80% reduction)
-
-**New Monthly Cost: $15,800**
-**Monthly Savings: $48,200**
-**Annual ROI: $578,400**
-
-### Additional Business Value
-- 99.99% uptime achievement: $2M/year in avoided downtime costs
-- Faster global feature rollout: $5M/year in competitive advantage
-- Automated compliance: $1M/year in reduced audit costs
-
-**Total Annual Value: $8.578M**
-EOF
-
-cat enterprise-scale-roi.md
-```
-
-## Advanced Multi-Cluster Patterns
-
-### Exercise 11: Cross-Cluster Canary Deployments
-
-```bash
-# Global canary deployment strategy
-kubectl --context=us-east apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
 metadata:
-  name: global-canary
+  name: backend-failover
 spec:
-  hosts:
-  - account-service.default.global
+  hosts: [backend]
   http:
-  # 5% global traffic to new version
   - route:
-    - destination:
-        host: account-service.default.svc.cluster.local
-        subset: v1
-      weight: 95
-    - destination:
-        host: account-service.default.svc.cluster.local
-        subset: v2
-      weight: 5
+    - destination: {host: backend}
+      weight: 100
+    - destination: {host: eu-backend.default.global}
+      weight: 0
+    fault:
+      abort:
+        percentage:
+          value: 0
+        httpStatus: 503
 EOF
 ```
 
-### Exercise 12: Service Mesh Federation
+### Step 3: Test Failover Behavior
 
 ```bash
-# Configure service mesh federation for acquired companies
-kubectl --context=us-east apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: ServiceEntry
-metadata:
-  name: acquired-company-services
-spec:
-  hosts:
-  - legacy-system.acquired.global
-  location: MESH_EXTERNAL
-  ports:
-  - number: 443
-    name: https
-    protocol: HTTPS
-  resolution: DNS
-  endpoints:
-  - address: legacy-gateway.acquired.com
+for i in {1..10}; do
+  kubectl exec deployment/frontend -- curl http://backend/ -m 5 || echo "Request failed"
+  sleep 1
+done
+```
+
+#### Verify: Disaster Recovery
+
+```bash
+kubectl get pods -l app=backend
+kubectl get destinationrule backend-failover -o yaml
+```
+
+#### Reflection Questions
+- How quickly can traffic fail over to healthy regions?
+- What monitoring is needed for disaster recovery?
+- How would you test disaster recovery procedures?
+
+## Customer Application: Presenting to Sarah
+
+Practice showing Sarah how multi-cluster service mesh meets enterprise requirements.
+
+### The Enterprise Scale Problem Recap
+*"Sarah, you mentioned needing global deployment with regulatory compliance. Let me show you how service mesh scales to meet enterprise requirements..."*
+
+### Demo Script for Executive Team
+
+Show multi-cluster topology:
+1. "Here are your global regions with consistent security policies"
+2. "Traffic routes intelligently based on compliance requirements"
+3. "Disaster recovery happens automatically with zero configuration changes"
+
+### Business Impact Calculation
+
+```bash
+cat > enterprise-roi.md << EOF
+## Multi-Cluster Service Mesh ROI
+
+### Before Multi-Cluster Mesh
+- Manual policy synchronization: 40 hours/month
+- Disaster recovery testing: 80 hours/quarter  
+- Compliance audit preparation: 200 hours/year
+- Cross-region debugging: 60 hours/month
+- Regional deployment coordination: 120 hours/month
+
+### After Multi-Cluster Mesh
+- Automatic policy federation: 5 hours/month
+- Disaster recovery validation: 20 hours/quarter
+- Compliance automation: 40 hours/year
+- Unified observability: 10 hours/month
+- Coordinated deployments: 20 hours/month
+
+### Annual Enterprise Value
+- Operational efficiency: $1.2M
+- Compliance cost reduction: $800K
+- Disaster recovery confidence: $2M risk mitigation
+- Global deployment velocity: $1.5M competitive advantage
+
+**Total Annual Multi-Cluster ROI: $5.5M**
 EOF
 ```
+
+### Handling Enterprise Questions
+
+**"How do we manage certificate rotation across clusters?"**
+- *"Istio handles certificate distribution automatically. The shared root CA ensures trust across all clusters while maintaining security boundaries."*
+
+**"What happens if network connectivity between clusters fails?"**
+- *"Each cluster operates independently. Services continue working within their cluster, and traffic automatically routes to available regions."*
+
+**"How do we ensure compliance with data residency laws?"**
+- *"Service mesh routing rules enforce data residency at the infrastructure level. EU data never leaves EU clusters, with audit trails proving compliance."*
 
 ## Key Takeaways
 
 ### Technical Understanding
 - **Multi-cluster networking**: Secure service communication across cluster boundaries
-- **Policy federation**: Consistent security and traffic policies across global infrastructure
-- **Global load balancing**: Intelligent routing based on locality and health
+- **Policy federation**: Consistent security and traffic policies across global deployment
+- **Global load balancing**: Intelligent traffic routing based on region, latency, and compliance
 - **Disaster recovery**: Automatic failover with minimal service disruption
 
 ### Enterprise Value Framework
-- **Global scale**: Service mesh scales from single cluster to worldwide deployment
-- **Compliance automation**: Regulatory requirements enforced automatically
-- **Operational consistency**: Same tools and processes across all regions
-- **Business continuity**: Disaster recovery built into the infrastructure
+- **Global scale**: Deploy services across regions while maintaining consistency
+- **Regulatory compliance**: Enforce data residency and compliance requirements
+- **High availability**: 99.99% uptime through automatic disaster recovery
+- **Operational efficiency**: Unified management across multiple clusters
 
 ### PM Skills
-- **Enterprise positioning**: Address global scale and compliance requirements
-- **Architecture guidance**: Help customers design multi-region deployments
-- **Compliance value**: Demonstrate automated regulatory compliance
-- **Business continuity**: Show how technology enables business resilience
+- **Enterprise positioning**: Address global deployment and compliance requirements
+- **Risk mitigation**: Quantify disaster recovery and compliance value
+- **Technical depth**: Understand multi-cluster networking and certificate management
+- **Executive communication**: Translate complex technical capabilities to business outcomes
 
 ## Troubleshooting Guide
 
-### Cross-cluster connectivity issues
+#### If cross-cluster communication fails:
 ```bash
-istioctl proxy-config endpoints account-service-xxx | grep global
-kubectl get serviceentry -A
+kubectl get serviceentry
+kubectl logs -n istio-system deployment/istiod | grep discovery
 ```
 
-### Policy federation problems
+#### If certificate issues across clusters:
 ```bash
-kubectl get peerauthentication -A --context=us-east
-kubectl get peerauthentication -A --context=eu-west
+kubectl get secrets -n istio-system | grep cacerts
+kubectl logs -n istio-system deployment/istiod | grep cert
 ```
 
-### Multi-cluster observability gaps
+#### If policy federation not working:
 ```bash
-kubectl -n istio-system get configmap kiali -o yaml
-istioctl proxy-status --context=us-east
+kubectl get peerauthentication,authorizationpolicy -A
+istioctl analyze --all-namespaces
+```
+
+## Cleanup
+
+```bash
+kubectl config use-context us-east
+kubectl delete virtualservice,destinationrule,serviceentry --all
+kubectl config use-context eu-west  
+kubectl delete virtualservice,destinationrule,serviceentry --all
+kind delete cluster --name us-east
+kind delete cluster --name eu-west
+rm -f enterprise-roi.md
 ```
 
 ## Next Steps
 
 You now understand:
 - Multi-cluster service mesh deployment and management
-- Enterprise-scale policy federation and compliance
-- Global load balancing and disaster recovery
-- Operational consistency across distributed infrastructure
+- Enterprise-scale policy federation and compliance enforcement
+- Global load balancing and disaster recovery patterns
+- Business value of enterprise service mesh deployment
 
-**Next module**: [Integration & Customization](../08-integration/) - Learn how to integrate service mesh with existing enterprise systems and customize for specific requirements.
+**Next module**: [Integration & Ecosystem](../08-integration/) - Learn how service mesh integrates with the broader cloud-native ecosystem.
 
 ```bash
 cd ../08-integration
 cat README.md
 ```
 
-**Progress check**: Can you design and present a multi-cluster service mesh architecture to enterprise leadership? Can you demonstrate compliance automation and disaster recovery? If yes, you're ready for the final integration module.
+**Progress check**: Can you design multi-cluster service mesh architecture for enterprise requirements? Can you quantify the business value of global deployment and compliance? If yes, you're ready for ecosystem integration in Module 8.

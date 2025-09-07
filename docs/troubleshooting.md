@@ -39,7 +39,7 @@
   ```
 - Verify with:
   ```bash
-  istioctl authn tls-check httpbin.default.svc.cluster.local
+  istioctl proxy-config clusters <pod-name> --fqdn httpbin.default.svc.cluster.local --direction outbound
   ```
 
 ### Productpage not accessible
@@ -52,7 +52,7 @@
 ### DNS or endpoints seem stale
 - Check EndpointSlices and kube-proxy:
   ```bash
-  kubectl get endpointslices
+  kubectl get endpointslices -l kubernetes.io/service-name=<service-name>
   kubectl -n kube-system logs ds/kube-proxy | tail
   ```
 

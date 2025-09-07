@@ -1,0 +1,87 @@
+.terminal-container {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  border-radius: 4px;
+}
+
+.terminal-header {
+  background: #2d2d2d;
+  color: #d4d4d4;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #404040;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.terminal-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.terminal-button {
+  background: none;
+  border: none;
+  color: #d4d4d4;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 3px;
+  transition: background-color 0.2s;
+  font-size: 1rem;
+}
+
+.terminal-button:hover {
+  background: #404040;
+}
+
+.terminal {
+  flex: 1;
+  padding: 0.5rem;
+  overflow: hidden;
+}
+
+.terminal .xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.terminal .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.terminal .xterm .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal .xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: #2d2d2d;
+}
+
+.terminal .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.terminal .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #777;
+}
+
+.terminal .xterm-rows {
+  font-family: 'SFMono Nerd Font', 'MesloLGS NF', 'FiraCode Nerd Font', 'Hack Nerd Font', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+}
+
+.terminal-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #d4d4d4;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+

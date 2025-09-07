@@ -35,77 +35,144 @@ Welcome back to **Sarah Martinez**, Principal Security Architect at MegaBank Cor
 Understanding the security architecture is crucial for positioning to enterprise security teams.
 
 ### Lab Setup
+
 ```bash
-# Start with your chosen architecture from Module 3
 make kind-up
-
-# For this module, we'll use sidecar mode for full L7 policy capabilities
 make istio-sidecar
+```
 
-# Deploy Sarah's enterprise-like microservices
-kubectl create deployment frontend --image=nginx --replicas=2
-kubectl create deployment orders --image=httpd --replicas=3
+## Exercise 1: Deploy Enterprise Microservices
+
+### Step 1: Create Sarah's Service Architecture
+
+Deploy a realistic enterprise microservices setup with proper security boundaries.
+
+```bash
+kubectl create deployment frontend --image=nginxdemos/hello --replicas=2
+kubectl create deployment orders --image=nginxdemos/hello --replicas=3
 kubectl create deployment payments --image=nginx:alpine --replicas=2
 kubectl create deployment customer-db --image=postgres:13 --env="POSTGRES_PASSWORD=secret"
+```
 
+### Step 2: Expose Services
+
+```bash
 kubectl expose deployment frontend --port=80
 kubectl expose deployment orders --port=80
 kubectl expose deployment payments --port=80
 kubectl expose deployment customer-db --port=5432
+```
 
-# Create unique service accounts for least privilege (enterprise best practice)
+### Step 3: Create Dedicated Service Accounts
+
+Implement least privilege principle with unique service accounts per service.
+
+```bash
 kubectl create serviceaccount frontend-sa
 kubectl create serviceaccount orders-sa
 kubectl create serviceaccount payments-sa
 kubectl create serviceaccount customer-db-sa
+```
 
-# Update deployments to use dedicated service accounts
+### Step 4: Update Deployments with Service Accounts
+
+```bash
 kubectl patch deployment frontend -p '{"spec":{"template":{"spec":{"serviceAccount":"frontend-sa"}}}}'
 kubectl patch deployment orders -p '{"spec":{"template":{"spec":{"serviceAccount":"orders-sa"}}}}'
 kubectl patch deployment payments -p '{"spec":{"template":{"spec":{"serviceAccount":"payments-sa"}}}}'
 kubectl patch deployment customer-db -p '{"spec":{"template":{"spec":{"serviceAccount":"customer-db-sa"}}}}'
-
-# Enable sidecar injection
-kubectl label namespace default istio-injection=enabled
-kubectl rollout restart deployment frontend orders payments customer-db
-
-# Wait for deployment
-kubectl rollout status deployment frontend orders payments customer-db
 ```
 
-### Exercise 1: Understanding Workload Identity
+### Step 5: Enable Sidecar Injection
 
 ```bash
-# Examine workload identities
-kubectl get pods -o custom-columns="POD:metadata.name,SA:spec.serviceAccount" | head -10
-
-# Look at default service accounts
-kubectl get serviceaccounts
-kubectl describe serviceaccount default
-
-# See the SPIFFE identity in action
-kubectl exec deployment/frontend -c istio-proxy -- openssl s_client -connect orders:80 -verify_return_error < /dev/null 2>&1 | grep -A 5 "subject="
-
-# View the certificate details
-istioctl proxy-config secret frontend-xxx -o json | jq '.dynamicActiveSecrets[0].secret.tlsCertificate.certificateChain.inlineBytes' | base64 -d | openssl x509 -text -noout | grep -A 2 "Subject Alternative Name"
+kubectl label namespace default istio-injection=enabled
+kubectl rollout restart deployment frontend orders payments customer-db
+kubectl rollout status deployment frontend
+kubectl rollout status deployment orders
+kubectl rollout status deployment payments
+kubectl rollout status deployment customer-db
 ```
 
+#### Verify: Check Service Identity Setup
+
+```bash
+kubectl get pods -o custom-columns="POD:metadata.name,SA:spec.serviceAccount"
+kubectl get serviceaccounts
+```
+
+Each pod should now have a dedicated service account and 2 containers (app + istio-proxy).
+
+#### Reflection Questions
+- How does dedicated service accounts improve security?
+- What's the relationship between service accounts and workload identity?
+- How does this scale across Sarah's 2,000+ microservices?
+
+## Exercise 2: Understanding Workload Identity
+
+### Step 1: Examine SPIFFE Identities
+
+```bash
+kubectl exec deployment/frontend -c istio-proxy -- openssl s_client -connect orders:80 -verify_return_error < /dev/null 2>&1 | grep -A 5 "subject="
+```
+
+### Step 2: View Certificate Details
+
+```bash
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+```
+
+Inside debug pod:
+
+```bash
+POD_NAME=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config secret $POD_NAME -o json | jq '.dynamicActiveSecrets[0].secret.tlsCertificate.certificateChain.inlineBytes' | base64 -d | openssl x509 -text -noout | grep -A 2 "Subject Alternative Name"
+exit
+```
+
+#### Verify: Identity Binding
+
+```bash
+kubectl describe serviceaccount frontend-sa
+```
+
+#### Reflection Questions
+- What format do SPIFFE identities use?
+- How are certificates automatically issued and bound to service accounts?
+- How does this provide cryptographic proof of service identity?
+
 **What Sarah sees:**
-- **SPIFFE identities**: `spiffe://cluster.local/ns/default/sa/default`
+- **SPIFFE identities**: `spiffe://cluster.local/ns/default/sa/frontend-sa`
 - **Automatic certificates**: Issued by Istio's built-in CA
 - **Identity binding**: Service account = cryptographic identity
 
-### Exercise 2: Implementing Automatic mTLS
+## Exercise 3: Implement Automatic mTLS
+
+### Step 1: Check Current mTLS Status
 
 ```bash
-# Check current mTLS status
-istioctl authn tls-check frontend.default.svc.cluster.local
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+```
 
-# The default is PERMISSIVE (accepts both plaintext and mTLS)
-# Test plaintext connectivity from outside the mesh
+Inside debug pod:
+
+```bash
+POD_NAME=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config clusters $POD_NAME --fqdn orders.default.svc.cluster.local --direction outbound
+exit
+```
+
+### Step 2: Test Plaintext Connectivity
+
+```bash
 kubectl run external-client --image=curlimages/curl --rm -it -- curl http://frontend/
+```
 
-# Enable STRICT mTLS (Sarah's compliance requirement)
+This should work because default mode is PERMISSIVE.
+
+### Step 3: Enable Strict mTLS
+
+```bash
 kubectl apply -f - <<EOF
 apiVersion: security.istio.io/v1beta1
 kind: PeerAuthentication
@@ -116,23 +183,48 @@ spec:
   mtls:
     mode: STRICT
 EOF
-
-# Verify mTLS is now required
-istioctl authn tls-check frontend.default.svc.cluster.local
-
-# Test connectivity - in-mesh traffic still works
-kubectl exec deployment/frontend -- curl http://orders/
-
-# External traffic without mTLS fails (as it should)
-kubectl run external-client --image=curlimages/curl --rm -it -- curl http://frontend/ --timeout=5
 ```
+
+### Step 4: Verify mTLS Enforcement
+
+```bash
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+```
+
+Inside debug pod:
+
+```bash
+POD_NAME=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config clusters $POD_NAME --fqdn orders.default.svc.cluster.local --direction outbound
+exit
+```
+
+#### Verify: Test Connectivity
+
+In-mesh traffic should still work:
+
+```bash
+kubectl exec deployment/frontend -- curl http://orders/
+```
+
+External traffic without mTLS should fail:
+
+```bash
+kubectl run external-client --image=curlimages/curl --rm -it -- curl http://frontend/ --max-time 5
+```
+
+#### Reflection Questions
+- What changed when switching from PERMISSIVE to STRICT mode?
+- How does this meet Sarah's compliance requirements?
+- What happens to certificate rotation?
 
 **Sarah's compliance win**: All service-to-service traffic is now encrypted with rotating certificates
 
-### Exercise 3: Fine-Grained Authorization Policies
+## Exercise 4: Fine-Grained Authorization Policies
+
+### Step 1: Implement Zero-Trust (Deny All)
 
 ```bash
-# Start with deny-all policy (zero-trust principle)
 kubectl apply -f - <<EOF
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -140,14 +232,21 @@ metadata:
   name: deny-all
   namespace: default
 spec:
-  {}  # Empty spec = deny all
+  {}
 EOF
+```
 
-# Test that everything is blocked
-kubectl exec deployment/frontend -- curl http://orders/ --timeout=5
-# Should fail with RBAC access denied
+### Step 2: Test Complete Lockdown
 
-# Allow frontend to access orders (business requirement)
+```bash
+kubectl exec deployment/frontend -- curl http://orders/ --max-time 5
+```
+
+This should fail with RBAC access denied.
+
+### Step 3: Allow Specific Service Communication
+
+```bash
 kubectl apply -f - <<EOF
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -166,20 +265,31 @@ spec:
   - to:
     - operation:
         methods: ["GET", "POST"]
-        paths: ["/orders/*", "/health"]
+        paths: ["/", "/health"]
 EOF
-
-# Test specific access
-kubectl exec deployment/frontend -- curl http://orders/health  # Should work
-kubectl exec deployment/payments -- curl http://orders/health --timeout=5  # Should fail
 ```
+
+#### Verify: Test Specific Access
+
+```bash
+kubectl exec deployment/frontend -- curl http://orders/
+kubectl exec deployment/payments -- curl http://orders/ --max-time 5
+```
+
+Frontend should work, payments should fail.
+
+#### Reflection Questions
+- How does identity-based authorization differ from IP-based?
+- What business logic can be enforced at the infrastructure level?
+- How does this scale across complex service dependencies?
 
 **Sarah's security control**: Only authorized services can access specific endpoints
 
-### Exercise 4: Advanced Security Policies
+## Exercise 5: Advanced Security Policies
+
+### Step 1: Implement Business Security Requirements
 
 ```bash
-# Implement Sarah's business security requirements
 kubectl apply -f - <<EOF
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -192,7 +302,6 @@ spec:
       app: payments
   action: ALLOW
   rules:
-  # Only orders service can access payments
   - from:
     - source:
         principals: ["cluster.local/ns/default/sa/orders-sa"]
@@ -200,13 +309,11 @@ spec:
     - operation:
         methods: ["POST"]
         paths: ["/process-payment"]
-  # Health checks allowed from monitoring
   - to:
     - operation:
         methods: ["GET"]
         paths: ["/health", "/ready"]
 ---
-# Customer database - most restrictive
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
@@ -218,31 +325,51 @@ spec:
       app: customer-db
   action: ALLOW
   rules:
-  # Only specific services can access customer data
   - from:
     - source:
         principals: ["cluster.local/ns/default/sa/orders-sa"]
   - to:
     - operation:
         ports: ["5432"]
-  # Deny direct access to sensitive operations
-  - to:
-    - operation:
-        notPorts: ["5432"]
-    action: DENY
 EOF
-
-# Test the payment security
-kubectl exec deployment/orders -- curl -X POST http://payments/process-payment
-kubectl exec deployment/frontend -- curl -X POST http://payments/process-payment --timeout=5  # Should fail
 ```
+
+### Step 2: Test Payment Security
+
+```bash
+kubectl exec deployment/orders -- curl -X POST http://payments/process-payment
+kubectl exec deployment/frontend -- curl -X POST http://payments/process-payment --max-time 5
+```
+
+Orders should work, frontend should fail.
+
+#### Verify: Database Access Control
+
+```bash
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+```
+
+Inside debug pod:
+
+```bash
+telnet customer-db 5432
+exit
+```
+
+This should timeout (access denied).
+
+#### Reflection Questions
+- How do these policies implement the principle of least privilege?
+- What compliance frameworks does this satisfy?
+- How would you extend this to handle JWT claims or custom headers?
 
 **Sarah's compliance framework**: Multi-layered security with principle of least privilege
 
-### Exercise 5: JWT and External Identity Integration
+## Exercise 6: JWT and External Identity Integration
+
+### Step 1: Configure Enterprise Identity Integration
 
 ```bash
-# Simulate Sarah's enterprise identity integration
 kubectl apply -f - <<EOF
 apiVersion: security.istio.io/v1beta1
 kind: RequestAuthentication
@@ -255,9 +382,8 @@ spec:
       app: frontend
   jwtRules:
   - issuer: "https://megabank.corp/identity"
-    jwksUri: "https://megabank.corp/.well-known/jwks.json"  # Placeholder - replace with real IdP
+    jwksUri: "https://megabank.corp/.well-known/jwks.json"
     audiences: ["frontend-service"]
-    # Note: In production, integrate with Azure AD/Entra, Auth0, Okta, etc.
 ---
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -270,21 +396,30 @@ spec:
       app: frontend
   action: ALLOW
   rules:
-  # Allow requests with valid JWT from enterprise identity
   - when:
     - key: request.auth.claims[iss]
       values: ["https://megabank.corp/identity"]
     - key: request.auth.claims[role]
       values: ["frontend-service", "admin"]
-  # Health checks don't need JWT
   - to:
     - operation:
         paths: ["/health", "/ready"]
 EOF
-
-# Test JWT policy (would work with real JWT in production)
-kubectl exec deployment/frontend -- curl http://frontend/health  # Health check works
 ```
+
+#### Verify: JWT Policy Configuration
+
+```bash
+kubectl get requestauthentication frontend-jwt -o yaml
+kubectl exec deployment/frontend -- curl http://frontend/health
+```
+
+Health checks should work without JWT.
+
+#### Reflection Questions
+- How does service mesh integrate with existing identity providers?
+- What claims-based authorization is possible?
+- How does this work with Azure AD, Okta, or Auth0?
 
 **Sarah's enterprise integration**: Service mesh identity works with existing corporate identity systems
 
@@ -304,12 +439,11 @@ kubectl exec deployment/frontend -- curl http://frontend/health  # Health check 
 
 *Example: "Only orders-sa can POST to /process-payment with valid JWT" - impossible with CNI L7 alone*
 
-## Security Audit and Compliance
+## Exercise 7: Security Audit and Compliance
 
-### Exercise 6: Generating Audit Trails
+### Step 1: Enable Detailed Access Logging
 
 ```bash
-# Enable detailed access logging for compliance
 kubectl apply -f - <<EOF
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
@@ -339,54 +473,164 @@ spec:
         "destination_principal": "%UPSTREAM_LOCAL_ADDRESS%"
       }
 EOF
+```
 
-# Generate traffic to create audit trail
+### Step 2: Generate Traffic for Audit Trail
+
+```bash
 kubectl exec deployment/frontend -- curl http://orders/health
 kubectl exec deployment/orders -- curl -X POST http://payments/process-payment
-
-# View audit logs
-kubectl logs deployment/orders -c istio-proxy | tail -5 | jq '.'
 ```
+
+### Step 3: View Audit Logs
+
+```bash
+kubectl logs deployment/orders -c istio-proxy | tail -5
+```
+
+#### Verify: Structured Audit Data
+
+```bash
+kubectl logs deployment/orders -c istio-proxy | tail -1 | jq '.'
+```
+
+#### Reflection Questions
+- What audit information is automatically captured?
+- How does this meet compliance requirements?
+- What additional context is available compared to traditional logging?
 
 **Sarah's audit capability**: Complete audit trail of all service communications with security context
 
-### Exercise 7: Policy Violation Detection
+## Exercise 8: Policy Violation Detection
+
+### Step 1: Simulate Policy Violations
 
 ```bash
-# Simulate policy violations for audit demonstration
 kubectl run malicious-pod --image=curlimages/curl --rm -it -- sh
-# Inside pod:
-curl http://payments/process-payment --timeout=5  # Should be denied
-curl http://customer-db:5432 --timeout=5          # Should be denied
+```
 
-# Check the denial logs
+Inside the malicious pod:
+
+```bash
+curl http://payments/process-payment --max-time 5
+curl http://customer-db:5432 --max-time 5
+exit
+```
+
+Both should be denied.
+
+### Step 2: Check Denial Logs
+
+```bash
 kubectl logs deployment/payments -c istio-proxy | grep "RBAC: access denied"
 kubectl logs deployment/customer-db -c istio-proxy | grep "RBAC: access denied"
-
-# Generate compliance report
-kubectl logs deployment/payments -c istio-proxy | grep "RBAC" | jq '. | {timestamp: .timestamp, method: .method, path: .path, response_code: .response_code, source: .source_principal}'
 ```
+
+### Step 3: Generate Compliance Report
+
+```bash
+kubectl logs deployment/payments -c istio-proxy | grep "RBAC" | tail -5
+```
+
+#### Verify: Security Monitoring
+
+```bash
+kubectl logs deployment/payments -c istio-proxy | grep "403" | tail -1 | jq '. | {timestamp: .timestamp, method: .method, path: .path, response_code: .response_code}'
+```
+
+#### Reflection Questions
+- How quickly can security violations be detected?
+- What alerting can be built on top of these logs?
+- How does this improve incident response time?
 
 **Sarah's security monitoring**: Real-time policy violation detection and alerting
 
-### Exercise 8: Certificate Management and Rotation
+## Exercise 9: Certificate Management and Rotation
+
+### Step 1: View Current Certificates
 
 ```bash
-# View certificate rotation in action
-istioctl proxy-config secret frontend-xxx -o json | jq '.dynamicActiveSecrets[0].secret.tlsCertificate.certificateChain.inlineBytes' | base64 -d | openssl x509 -text -noout | grep -A 2 "Validity"
-
-# Check certificate rotation configuration
-kubectl -n istio-system get configmap istio -o yaml | grep -A 10 "workloadCertTtl"
-
-# Simulate certificate rotation (normally automatic)
-kubectl delete secret istio-ca-secret -n istio-system  # Don't do this in production!
-kubectl -n istio-system rollout restart deployment/istiod
-
-# Verify new certificates are issued
-kubectl wait --for=condition=available --timeout=300s deployment/istiod -n istio-system
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
 ```
 
+Inside debug pod:
+
+```bash
+POD_NAME=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config secret $POD_NAME -o json | jq '.dynamicActiveSecrets[0].secret.tlsCertificate.certificateChain.inlineBytes' | base64 -d | openssl x509 -text -noout | grep -A 2 "Validity"
+exit
+```
+
+### Step 2: Check Certificate Configuration
+
+```bash
+kubectl -n istio-system get configmap istio -o yaml | grep -A 5 "workloadCertTtl"
+```
+
+#### Verify: Automatic Rotation
+
+```bash
+kubectl -n istio-system get pods -l app=istiod
+kubectl -n istio-system logs deployment/istiod | grep -i cert | tail -5
+```
+
+#### Reflection Questions
+- How often do certificates rotate automatically?
+- What happens during certificate rotation?
+- How does this eliminate manual certificate management overhead?
+
 **Sarah's operational security**: Automatic certificate rotation without service disruption
+
+## Exercise 10: Multi-Namespace Security
+
+### Step 1: Create Production-like Isolation
+
+```bash
+kubectl create namespace production
+kubectl create namespace staging
+kubectl label namespace production istio-injection=enabled
+kubectl label namespace staging istio-injection=enabled
+```
+
+### Step 2: Deploy Services in Different Namespaces
+
+```bash
+kubectl -n production create deployment orders --image=nginxdemos/hello
+kubectl -n staging create deployment orders --image=nginxdemos/hello
+kubectl -n production expose deployment orders --port=80
+kubectl -n staging expose deployment orders --port=80
+```
+
+### Step 3: Implement Namespace-Level Security
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: production-isolation
+  namespace: production
+spec:
+  action: DENY
+  rules:
+  - from:
+    - source:
+        notNamespaces: ["production", "istio-system"]
+EOF
+```
+
+#### Verify: Test Namespace Isolation
+
+```bash
+kubectl -n production run test --image=curlimages/curl --rm -it -- curl http://orders.staging.svc.cluster.local/ --max-time 5
+```
+
+This should fail (cross-namespace access denied).
+
+#### Reflection Questions
+- How does namespace isolation improve security boundaries?
+- What production/staging separation is achieved?
+- How does this scale across multiple environments?
 
 ## Customer Application: Security Audit Presentation
 
@@ -396,34 +640,35 @@ Practice presenting Sarah's security implementation to auditors and the CISO.
 *"Sarah, let me show you how we've implemented enterprise-grade zero-trust security that exceeds your compliance requirements..."*
 
 ### Audit Presentation Script
+
 ```bash
-# 1. Identity and Encryption (5 minutes)
-istioctl authn tls-check frontend.default.svc.cluster.local
-kubectl exec deployment/frontend -c istio-proxy -- openssl s_client -connect orders:80 -verify_return_error < /dev/null 2>&1 | grep "Verification: OK"
-
-# 2. Policy Enforcement (10 minutes)
-kubectl exec deployment/frontend -- curl http://orders/health    # Allowed
-kubectl exec deployment/payments -- curl http://customer-db:5432 --timeout=5  # Denied
-
-# 3. Audit Trail (5 minutes)
-kubectl logs deployment/orders -c istio-proxy | tail -10 | jq '.method, .path, .response_code, .source_principal'
-
-# 4. Certificate Management (5 minutes)
-istioctl proxy-config secret frontend-xxx -o json | jq '.dynamicActiveSecrets[0].secret.tlsCertificate.certificateChain.inlineBytes' | base64 -d | openssl x509 -text -noout | grep "Subject Alternative Name" -A 1
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
 ```
 
-### Handling CISO Questions
+Inside debug pod:
 
-**"How do we know this security cannot be bypassed?"**
-- *"All traffic is cryptographically verified at the infrastructure layer. Application code cannot bypass these controls - they're enforced before traffic reaches the application."*
+```bash
+POD_NAME=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config clusters $POD_NAME --fqdn orders.default.svc.cluster.local --direction outbound
+kubectl exec deployment/frontend -c istio-proxy -- openssl s_client -connect orders:80 -verify_return_error < /dev/null 2>&1 | grep "Verification: OK"
+exit
+```
 
-**"What happens if there's a security vulnerability in the mesh?"**
-- *"Istio has the same security response process as Kubernetes and Linux. Google's security team actively maintains it. We get security updates automatically through our update process."*
+Show policy enforcement:
 
-**"How do we prove compliance to auditors?"**
-- *"Every service communication generates an audit log with cryptographic proof of identity. We can show exactly which services communicated, when, and with what authorization."*
+```bash
+kubectl exec deployment/frontend -- curl http://orders/health
+kubectl exec deployment/payments -- curl http://customer-db:5432 --max-time 5
+```
+
+Show audit trail:
+
+```bash
+kubectl logs deployment/orders -c istio-proxy | tail -5
+```
 
 ### ROI for Security Team
+
 ```bash
 cat > security-roi.md << EOF
 ## Security Team ROI: Service Mesh Implementation
@@ -448,82 +693,18 @@ cat > security-roi.md << EOF
 
 **Total Annual Security ROI: $391,200**
 EOF
-
-cat security-roi.md
 ```
 
-## Advanced Security Patterns
+### Handling CISO Questions
 
-### Exercise 9: Multi-Namespace Security
+**"How do we know this security cannot be bypassed?"**
+- *"All traffic is cryptographically verified at the infrastructure layer. Application code cannot bypass these controls - they're enforced before traffic reaches the application."*
 
-```bash
-# Create production-like namespace isolation
-kubectl create namespace production
-kubectl create namespace staging
-kubectl label namespace production istio-injection=enabled
-kubectl label namespace staging istio-injection=enabled
+**"What happens if there's a security vulnerability in the mesh?"**
+- *"Istio has the same security response process as Kubernetes and Linux. Google's security team actively maintains it. We get security updates automatically through our update process."*
 
-# Deploy services in different namespaces
-kubectl -n production create deployment orders --image=httpd
-kubectl -n staging create deployment orders --image=httpd
-kubectl -n production expose deployment orders --port=80
-kubectl -n staging expose deployment orders --port=80
-
-# Implement namespace-level security
-kubectl apply -f - <<EOF
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: production-isolation
-  namespace: production
-spec:
-  action: DENY
-  rules:
-  - from:
-    - source:
-        notNamespaces: ["production", "istio-system"]
-EOF
-
-# Test namespace isolation
-kubectl -n production exec deployment/orders -- curl http://orders.staging/  # Should fail
-kubectl -n staging exec deployment/orders -- curl http://orders.production/  # Should fail
-```
-
-### Exercise 10: External Service Security
-
-```bash
-# Secure access to external services
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: ServiceEntry
-metadata:
-  name: external-payment-processor
-spec:
-  hosts: ["payments.external.com"]
-  ports:
-  - number: 443
-    name: https
-    protocol: HTTPS
-  location: MESH_EXTERNAL
-  resolution: DNS
----
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: external-payments-access
-spec:
-  action: ALLOW
-  rules:
-  - from:
-    - source:
-        principals: ["cluster.local/ns/default/sa/payments"]
-  - to:
-    - operation:
-        hosts: ["payments.external.com"]
-        methods: ["POST"]
-        paths: ["/process"]
-EOF
-```
+**"How do we prove compliance to auditors?"**
+- *"Every service communication generates an audit log with cryptographic proof of identity. We can show exactly which services communicated, when, and with what authorization."*
 
 ## Key Takeaways
 
@@ -547,22 +728,41 @@ EOF
 
 ## Troubleshooting Guide
 
-### mTLS connectivity issues
+#### If mTLS connectivity issues:
 ```bash
-istioctl authn tls-check <service>.<namespace>.svc.cluster.local
-kubectl logs <pod> -c istio-proxy | grep -i tls
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+POD_NAME=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config clusters $POD_NAME --fqdn orders.default.svc.cluster.local --direction outbound
+kubectl logs $POD_NAME -c istio-proxy | grep -i tls
+exit
 ```
 
-### Authorization policy debugging
+#### If authorization policy debugging:
 ```bash
 istioctl analyze
-kubectl logs <pod> -c istio-proxy | grep RBAC
+kubectl logs deployment/orders -c istio-proxy | grep RBAC
 ```
 
-### Certificate issues
+#### If certificate issues:
 ```bash
-istioctl proxy-config secret <pod> -o json | jq '.dynamicActiveSecrets'
+kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
+POD_NAME=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config secret $POD_NAME -o json | jq '.dynamicActiveSecrets'
+exit
 kubectl -n istio-system logs deployment/istiod | grep cert
+```
+
+## Cleanup
+
+```bash
+kubectl delete authorizationpolicy --all
+kubectl delete peerauthentication --all
+kubectl delete requestauthentication --all
+kubectl delete namespace production staging
+kubectl delete deployment frontend orders payments customer-db
+kubectl delete service frontend orders payments customer-db
+kubectl delete serviceaccount frontend-sa orders-sa payments-sa customer-db-sa
+rm -f security-roi.md
 ```
 
 ## Next Steps
