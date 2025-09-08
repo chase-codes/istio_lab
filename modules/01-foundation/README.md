@@ -230,6 +230,15 @@ kubectl logs deployment/frontend
 kubectl logs deployment/backend
 ```
 
+What this shows:
+- `kubectl get pods -o wide`: Pod IPs, nodes, and labels. You can see where workloads run.
+- `kubectl logs`: Application logs from each Deployment. You might see request lines if apps log them.
+
+Why this is insufficient:
+- There is no service-to-service map. You see pods, not who called whom.
+- No traffic volume or error rate between services. Logs are per service, not correlated across calls.
+- No end-to-end latency. You can time a single curl, but not aggregate latencies between services.
+
 ### Step 3: Test Observability Limitations
 
 Try to answer these questions with standard Kubernetes:
@@ -254,6 +263,14 @@ kubectl get services
 echo "6) Security: Who accessed what, when?"
 echo "No audit trail of service-to-service access available"
 ```
+
+What you’ll find (outcomes):
+- 1) Service-to-service map: Listing pods doesn’t show source→destination pairs. No dependency graph.
+- 2) Traffic volume: Pod listings and labels don’t expose request rates between services.
+- 3) Latency: A one-off curl shows a single request time, not P50/P90/P99 between services.
+- 4) Failures/retries: Grepping logs is manual, incomplete, and varies by team logging formats.
+- 5) Dependency graph: `kubectl get services` shows Service objects, not who calls whom.
+- 6) Security/audit: There is no runtime, per-request audit trail of which workload accessed which service.
 
 #### Reflection Questions
 - What information can you get about service-to-service communication?
