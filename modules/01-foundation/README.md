@@ -69,6 +69,9 @@ You should see:
 - A backend Service with a stable ClusterIP (like 10.96.x.x) 
 - All pod IPs registered as endpoints behind the Service
 
+Why this step: Establish a baseline app + Service so we can see how Kubernetes abstracts pods behind a stable Service IP.
+What to look for: Different Pod IPs vs one Service IP. This distinction drives the rest of the module.
+
 ### Step 2: Test Service Discovery
 
 Launch a debug pod to test connectivity and DNS resolution. This simulates how one service connects to another.
@@ -92,6 +95,9 @@ dig +short backend.default.svc.cluster.local
 
 This should return the Service IP you saw earlier (like 10.96.x.x).
 
+Why this step: Prove that clients resolve a Service name to a single virtual IP instead of pod IPs.
+What to look for: DNS returns one ClusterIP; curl works against names, not pod addresses.
+
 #### If dig fails:
 ```bash
 getent hosts backend.default.svc.cluster.local
@@ -110,6 +116,9 @@ done
 ```
 
 You should see different pod names (like backend-686576749d-abc12, backend-686576749d-def34, etc.) across requests, proving that Kubernetes is load balancing behind the scenes.
+
+Why this step: Show that even though you hit the same Service IP each time, kube-proxy spreads requests across pods.
+What to look for: Changing pod names across requests while the Service IP stays the same.
 
 Exit the debug pod:
 
@@ -355,17 +364,34 @@ kubectl exec deployment/frontend -- curl -s -o /dev/null -w "fake token -> HTTP 
 kubectl exec deployment/frontend -- curl -s -o /dev/null -w "spoofed header -> HTTP %{http_code}\n" -H "X-Admin-Secret: hacked" http://backend
 ```
 
+What this demonstrates (read before/after running):
+- You are still allowed to make these requests because the NetworkPolicy only checked "is TCP/80 allowed from frontend to backend?" It could not see the verb (DELETE/POST), the path (/admin/users), or the headers (Authorization/X-Admin-Secret).
+- The status codes you see will depend on the backend app. With a simple demo image, you may get HTTP 200 for non-existent paths. The key point is that the connection is allowed because the traffic matched TCP/80.
+
+Why this matters for PMs:
+- NetworkPolicies are necessary for baseline, but they cannot express business rules like "only GET /status" or "require valid JWT". Those are Layer 7 concerns.
+- Blocking or allowing based on HTTP method, path, and token claims requires L7-aware policy (e.g., service mesh AuthorizationPolicy), not just L3/L4 rules.
+
+Reflection questions:
+- If a compromised service sends DELETE/POST requests, how would NetworkPolicy react? How would an L7 policy react?
+- Which team owns L7 rules in your org today (platform vs. app), and how consistent are they across services?
+
 ### Step 3: Demonstrate Lack of Audit Trail
 
 ```bash
 kubectl logs deployment/backend
 ```
 
+Why this step: Check if application logs alone tell you who called the service and why a request was allowed or denied.
+What to look for: You will see app logs (if any), but not a per‑request allow/deny decision, caller identity, or policy reason.
+
 #### Verify: Show Plaintext Communication
 
 ```bash
 kubectl exec deployment/frontend -- curl -v http://backend 2>&1 | grep -E "(GET|Host|User-Agent)"
 ```
+
+Why this matters: Seeing HTTP headers in plaintext proves there is no encryption between services yet. This is the baseline before mTLS.
 
 ### Step 4: Show Identity Drift Problem
 
@@ -374,6 +400,9 @@ kubectl scale deployment frontend --replicas=0
 kubectl scale deployment frontend --replicas=1
 kubectl exec deployment/frontend -- curl http://backend
 ```
+
+Why this step: Auto‑scaling and restarts change pod IPs. NetworkPolicies still match by labels, but there’s no cryptographic proof that the new pod is the same workload identity.
+What to look for: New frontend pod name/IP, same label, connectivity still allowed. This highlights why identity that survives scaling is needed.
 
 The new frontend pod gets the same label but a different IP. Policy still works, but there's no cryptographic identity.
 
@@ -468,6 +497,9 @@ kubectl describe pod $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].m
 make mtls-strict
 ```
 
+Why this step: Turn on mutual TLS so every service‑to‑service call is encrypted and authenticated with certificates issued per workload.
+What to look for: After enabling, existing calls should still work; the difference is the transport is now encrypted and peer identities are verified.
+
 #### Verify: Test Encrypted Connectivity
 
 ```bash
@@ -479,6 +511,8 @@ The request still works, but now it's encrypted with automatic certificates.
 ```bash
 istioctl proxy-config clusters $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}') --fqdn backend.default.svc.cluster.local --direction outbound
 ```
+
+How to read this: You’re inspecting the proxy config to confirm that the connection to `backend` is using TLS. In later modules we’ll show the exact indicators.
 
 #### Reflection Questions
 - Did your application code change to support mTLS?
@@ -521,6 +555,9 @@ spec:
 EOF
 ```
 
+Why this step: Move from network reachability (can I connect?) to business intent (what is allowed to be done?). This policy says: only GET to `/` is allowed to `backend` from the default service account.
+What to look for: After applying, allowed requests should return a 200; disallowed requests should fail with an RBAC/403 response.
+
 #### Verify: Test Different Request Types
 
 ```bash
@@ -552,6 +589,8 @@ The GET request should work, the POST should fail with RBAC denied.
 make kiali
 ```
 
+Why this step: Kiali gives you a live map of service calls, success/error rates, and latency. It’s the “who talks to whom” view missing from plain Kubernetes.
+
 ### Step 2: Generate Traffic
 
 ```bash
@@ -560,6 +599,8 @@ for i in {1..20}; do
   sleep 1
 done
 ```
+
+What to look for: In Kiali, edges between `frontend` and `backend` should appear with request rates and health. If you don’t see traffic, wait a moment or refresh the graph.
 
 #### Verify: Check Kiali Dashboard
 
