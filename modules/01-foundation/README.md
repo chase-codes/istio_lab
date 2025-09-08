@@ -182,7 +182,7 @@ Inside the attacker pod, access everything:
 ```bash
 curl http://frontend
 curl http://backend
-curl http://kube-dns.kube-system:53
+curl -k https://kubernetes.default.svc.cluster.local
 exit
 ```
 
