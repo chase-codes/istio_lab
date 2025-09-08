@@ -506,13 +506,33 @@ What to look for: After enabling, existing calls should still work; the differen
 kubectl exec deployment/frontend -- curl http://backend
 ```
 
-The request still works, but now it's encrypted with automatic certificates.
+The request still works. Note: the HTTP response looks the same because mTLS encrypts the transport, not the payload content shown in your terminal. The difference is on the wire and in the proxy configuration.
 
 ```bash
 istioctl proxy-config clusters $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}') --fqdn backend.default.svc.cluster.local --direction outbound
 ```
 
-How to read this: You’re inspecting the proxy config to confirm that the connection to `backend` is using TLS. In later modules we’ll show the exact indicators.
+How to read this: You’re inspecting the proxy config to confirm that the connection to `backend` is using TLS.
+
+Further verification (pick one):
+
+```bash
+istioctl authn tls-check $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+```
+
+```bash
+POD=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config clusters $POD --fqdn backend.default.svc.cluster.local --direction outbound -o json | jq -r '.[0].transportSocket.name'
+# expect: envoy.transport_sockets.tls
+```
+
+Optional (on‑the‑wire check):
+
+```bash
+kubectl run sniffer --image=nicolaka/netshoot -it --rm -- /bin/bash
+tcpdump -i any -A "host backend.default.svc.cluster.local and port 80"
+# You should no longer see readable HTTP headers; the traffic is TLS records
+```
 
 #### Reflection Questions
 - Did your application code change to support mTLS?
