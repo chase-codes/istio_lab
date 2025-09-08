@@ -528,12 +528,27 @@ POD=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
 istioctl x describe pod $POD | grep -i mtls || true
 ```
 
-Optional (on‑the‑wire check):
+Optional (on-the-wire check):
 
 ```bash
-kubectl run sniffer --image=nicolaka/netshoot -it --rm -- /bin/bash
-tcpdump -i any -A "host backend.default.svc.cluster.local and port 80"
-# You should no longer see readable HTTP headers; the traffic is TLS records
+# 1) Generate some traffic (runs ~30s in background)
+kubectl exec deploy/frontend -- sh -c 'for i in $(seq 1 60); do curl -s -o /dev/null http://backend; sleep 0.5; done' &
+
+# 2) Sniff to a real backend Pod IP (not the Service name/IP)
+EP=$(kubectl get endpoints backend -o jsonpath='{.subsets[0].addresses[0].ip}')
+kubectl run sniffer --image=nicolaka/netshoot -it --rm -- \
+  /bin/bash -lc "tcpdump -i any -A 'host $EP and port 80' -c 20"
+
+# You should not see readable HTTP headers; packets appear as TLS records (gibberish)
+```
+
+If you still see no packets, run the sniffer on the same node as the backend Pod:
+
+```bash
+NODE=$(kubectl get pod -l app=backend -o jsonpath='{.items[0].spec.nodeName}')
+EP=$(kubectl get endpoints backend -o jsonpath='{.subsets[0].addresses[0].ip}')
+kubectl run sniffer --image=nicolaka/netshoot --overrides='{"spec":{"nodeName":"'"$NODE"'"}}' -it --rm -- \
+  /bin/bash -lc "tcpdump -i any -A 'host $EP and port 80' -c 20"
 ```
 
 #### Reflection Questions
