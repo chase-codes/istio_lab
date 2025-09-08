@@ -246,19 +246,24 @@ Try to answer these questions with standard Kubernetes:
 ```bash
 echo "1) Which services are talking to each other?"
 kubectl get pods -o wide
+echo
 
 echo "2) How much traffic is flowing between services?"
 kubectl get pods --show-labels
+echo
 
 echo "3) What's the latency between frontend and backend?"
 kubectl exec deployment/frontend -- curl -w "Time: %{time_total}s\n" -s -o /dev/null http://backend
+echo
 
 echo "4) Are there any failed requests or retry patterns?"
 kubectl logs deployment/frontend | grep -i error
 kubectl logs deployment/backend | grep -i error
+echo
 
 echo "5) What's the dependency graph of my applications?"
 kubectl get services
+echo
 
 echo "6) Security: Who accessed what, when?"
 echo "No audit trail of service-to-service access available"
