@@ -517,13 +517,15 @@ How to read this: You’re inspecting the proxy config to confirm that the conne
 Further verification (pick one):
 
 ```bash
-istioctl authn tls-check $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
-```
-
-```bash
 POD=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
 istioctl proxy-config clusters $POD --fqdn backend.default.svc.cluster.local --direction outbound -o json | jq -r '.[0].transportSocket.name'
 # expect: envoy.transport_sockets.tls
+```
+
+```bash
+# Describe the pod and look for mTLS indicators (command varies by Istio version)
+POD=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl x describe pod $POD | grep -i mtls || true
 ```
 
 Optional (on‑the‑wire check):
