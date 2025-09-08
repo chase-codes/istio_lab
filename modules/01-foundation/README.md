@@ -214,9 +214,10 @@ Create traffic between services to simulate normal operations.
 
 ```bash
 for i in {1..10}; do
-  kubectl exec deployment/frontend -- curl http://backend
+  kubectl exec deployment/frontend -- curl -s -o /dev/null -w "." http://backend
   sleep 1
 done
+echo
 ```
 
 ### Step 2: Try to Understand Network Activity
