@@ -277,6 +277,13 @@ What you’ll find (outcomes):
 - 5) Dependency graph: `kubectl get services` shows Service objects, not who calls whom.
 - 6) Security/audit: There is no runtime, per-request audit trail of which workload accessed which service.
 
+Practical takeaways for PMs
+- What Kubernetes shows: pods and services. It does not show “who talked to whom,” how often, or how fast.
+- What network tools add (Hubble, Calico, NetObserv, AKS Retina): they show traffic flows between IPs/ports and which network policies allowed or blocked them.
+- The limit: they usually lack request details (HTTP method/path/headers, user tokens) and durable service identity. You see traffic, but not the business operation behind it.
+- The scale problem: you can piece answers together for a few services, but during incidents at scale this becomes slow and error‑prone.
+- What mesh adds: a stable identity per service, automatic encryption, per‑request policy and telemetry at the HTTP layer, and one place to see and control it.
+
 #### Reflection Questions
 - What information can you get about service-to-service communication?
 - What critical visibility is missing for security and troubleshooting?
