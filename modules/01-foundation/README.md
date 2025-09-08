@@ -347,12 +347,12 @@ NetworkPolicies only control IP/port. Test what they cannot see at Layer 7.
 
 ```bash
 echo "Testing dangerous HTTP operations that NetworkPolicy can't block:"
-kubectl exec deployment/frontend -- curl -X DELETE http://backend/admin/users
-kubectl exec deployment/frontend -- curl -X POST -d "malicious=data" http://backend/sensitive-api
+kubectl exec deployment/frontend -- curl -s -o /dev/null -w "DELETE /admin/users -> HTTP %{http_code}\n" -X DELETE http://backend/admin/users
+kubectl exec deployment/frontend -- curl -s -o /dev/null -w "POST /sensitive-api -> HTTP %{http_code}\n" -X POST -d "malicious=data" http://backend/sensitive-api
 
 echo "Testing requests with fake tokens that NetworkPolicy can't validate:"
-kubectl exec deployment/frontend -- curl -H "Authorization: Bearer fake-token" http://backend
-kubectl exec deployment/frontend -- curl -H "X-Admin-Secret: hacked" http://backend
+kubectl exec deployment/frontend -- curl -s -o /dev/null -w "fake token -> HTTP %{http_code}\n" -H "Authorization: Bearer fake-token" http://backend
+kubectl exec deployment/frontend -- curl -s -o /dev/null -w "spoofed header -> HTTP %{http_code}\n" -H "X-Admin-Secret: hacked" http://backend
 ```
 
 ### Step 3: Demonstrate Lack of Audit Trail
