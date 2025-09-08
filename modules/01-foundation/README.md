@@ -192,13 +192,19 @@ exit
 
 **Platform team response**: *"We can fix this with default-deny NetworkPolicies and namespace isolation."*
 
-**The credible counter**: Absolutely - NetworkPolicies are essential baseline security. However:
-- They work at L3/4 (IP/port), not service identity
-- Labels and IPs can drift during auto-scaling or pod restarts
-- No L7 context (HTTP verbs, JWT claims, request headers)
-- Cross-namespace/multi-cluster scenarios require complex RBAC + VPN wiring
+**The credible counter**: Absolutely—NetworkPolicies are essential baseline security. However, they have important limits PMs should understand:
+- **Layer 3/4 scope**: Policies match IPs and ports, not who the workload is. If the pod IP changes or a malicious pod gets the right labels, the policy can still allow traffic.
+- **Identity drift**: Auto-scaling and restarts change pod IPs. Labels are human-managed metadata, not cryptographic identity.
+- **No Layer 7 awareness**: Cannot express "allow only GET /status" or "require Authorization header with valid JWT". All TCP/80 looks the same.
+- **Cross-namespace/multi-cluster complexity**: Enforcing consistent rules across namespaces and clusters requires complex RBAC, networking, and often VPN wiring.
 
-**Sarah's perspective**: "Any compromised service can access our entire infrastructure. NetworkPolicies help, but I need identity-based L7 policies that survive infrastructure changes."
+What service mesh adds on top:
+- **Cryptographic workload identity**: Each workload gets a verifiable identity (SPIFFE), not just a label.
+- **mTLS by default**: Encryption and identity are enforced per-request at runtime.
+- **L7 policy**: Express business rules (methods, paths, headers, JWT claims) close to the traffic.
+- **Consistent, centralized control**: Uniform policies across namespaces and clusters.
+
+**Sarah's perspective**: "NetworkPolicies are our baseline. For zero-trust, we also need runtime, identity-based L7 controls that survive scaling and infra changes."
 
 ## Exercise 3: The Observability Gap
 
