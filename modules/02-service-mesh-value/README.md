@@ -49,11 +49,19 @@ Create a realistic microservices setup to simulate Marcus's infrastructure chall
 ```bash
 kubectl create deployment frontend --image=nginx --replicas=2
 kubectl create deployment backend --image=nginxdemos/hello --replicas=3
-kubectl create deployment database --image=postgres:13 --env="POSTGRES_PASSWORD=secret"
+kubectl create deployment database --image=postgres:13
+kubectl set env deployment/database POSTGRES_PASSWORD=secret
 kubectl expose deployment frontend --port=80
 kubectl expose deployment backend --port=80
 kubectl expose deployment database --port=5432
 ```
+
+Why this step: Mirrors a typical 3‑tier microservice system so we can experience the current developer workflow and pain points before adding a mesh.
+
+What this does:
+- Creates Deployments for `frontend`, `backend`, and `database` (multiple replicas for realism)
+- Exposes each as a Service so other workloads can reach them by stable names
+- Seeds a simple database password via an environment variable (not best practice; used only for demo realism)
 
 #### Verify: Check Environment Status
 
@@ -64,16 +72,31 @@ kubectl get services
 
 You should see multiple replicas of each service running.
 
+What to look for:
+- Multiple `READY` pods per service (replicas)
+- Services with ClusterIP addresses
+- No visibility into which specific pod handles which request yet
+
 ### Step 2: Simulate Load Generation
 
 ```bash
 kubectl run load-generator --image=busybox --restart=Never -- /bin/sh -c "while true; do wget -q --spider http://frontend; sleep 1; done"
 ```
 
+Why this step: Real systems have constant background traffic. We generate steady requests so later tools (like Kiali) have data to visualize and you can observe latency/error changes when we tweak the system.
+
+What this does: Starts a very small pod that makes an HTTP request to `frontend` every second. `--spider` checks reachability without downloading content; `-q` suppresses normal output.
+
 #### Verify: Check Load Generator
 
 ```bash
 kubectl logs load-generator
+```
+
+What to look for: With `-q --spider`, logs are typically quiet unless there are errors. No news is good news. To see visible output instead, you can run this alternative load generator:
+
+```bash
+kubectl run traffic-ping --image=curlimages/curl --restart=Never -- /bin/sh -lc 'while true; do date; curl -s -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" http://frontend; sleep 1; done'
 ```
 
 ### Step 3: Experience Developer Debugging Pain
@@ -92,6 +115,13 @@ curl -w "Time: %{time_total}s\n" http://frontend/
 curl -w "Time: %{time_total}s\n" http://backend/
 exit
 ```
+
+Why these commands:
+- `nslookup` proves Kubernetes DNS resolves the `frontend` Service name to a stable virtual IP (ClusterIP).
+- `curl -w time_total` measures end‑to‑end latency from this client to `frontend` and to `backend` for comparison.
+
+What to look for:
+- If `frontend` is slower than `backend`, the bottleneck might be between `frontend` and its dependencies (not visible yet). Without a mesh, you cannot see which backend instance is slow or whether there are retries/errors between services.
 
 #### Reflection Questions
 - Which backend instance is slow?
@@ -140,6 +170,15 @@ data:
 EOF
 ```
 
+Why this step: Illustrates how cross‑cutting concerns (logging formats, health checks, retries) are hand‑rolled by each team without a mesh, leading to inconsistency and toil.
+
+What this does:
+- `logging-config` suggests a shared log format that app teams must import and honor
+- `frontend-health` exposes a separate port for health—another pattern teams re‑implement
+- `retry-config` encodes retry policy in ConfigMaps—every team must wire this into their code
+
+PM lens (business impact): Every divergent implementation increases operational burden, slows onboarding, and makes incident response inconsistent across teams.
+
 #### Verify: Check Manual Configurations
 
 ```bash
@@ -162,12 +201,16 @@ kubectl get services
 make istio-sidecar
 ```
 
+Why this step: Installs the control plane that will program per‑pod proxies. This enables security, traffic management, and observability without changing application code.
+
 ### Step 2: Enable Sidecar Injection
 
 ```bash
 kubectl label namespace default istio-injection=enabled
 kubectl rollout restart deployment frontend backend database
 ```
+
+What this does: Tells Kubernetes to automatically add an Envoy proxy sidecar to every pod in the `default` namespace, then restarts Deployments so new pods include the proxy.
 
 ### Step 3: Wait for Rollout Completion
 
@@ -185,6 +228,8 @@ kubectl describe pod $(kubectl get pod -l app=frontend -o jsonpath='{.items[0].m
 ```
 
 Each pod should now have 2 containers: the application and istio-proxy.
+
+What to look for: In `describe pod`, under Containers you should see your app container and an `istio-proxy` container. No application code changed—capabilities are added at the infrastructure layer.
 
 #### Reflection Questions
 - What changed for Marcus's developers in terms of code?
@@ -220,6 +265,10 @@ done
 exit
 ```
 
+Why this step: Kiali (and metrics backends) need a stream of requests to show rates, latencies, and error percentages.
+
+What to look for: After a short delay, edges between services should appear with request/second and latency percentiles. If you see no edges, wait a moment and refresh.
+
 ### Step 3: Explore Kiali Dashboard
 
 Open the Kiali dashboard and explore:
@@ -234,6 +283,8 @@ Look for:
 - Green lines indicating healthy traffic
 - Metrics showing request rates
 - Service dependency graph
+
+PM lens: This is the first time Marcus can see “who talks to whom,” at what rate, and how healthy those calls are—without asking developers to instrument code.
 
 #### Reflection Questions
 - How long would it take Marcus's team to build this visibility manually?
@@ -257,7 +308,19 @@ kubectl get pods -l app=backend -w
 
 Stop watching with Ctrl+C when rollout completes.
 
+Why this step: A traditional rolling update sends all traffic to whatever version happens to be live. If the new version is bad, customers see errors until you roll back.
+
+What to look for: Pods terminate and new ones start. There’s no way to send only a small percentage of traffic to the new version first.
+
 ### Step 2: Create Canary Deployment Infrastructure
+
+Prerequisite: Version labels for canary routing. The DestinationRule below routes by pod label `version`. Label most backend pods as `v1` and one pod as `v2` to simulate a new version:
+
+```bash
+kubectl label pod -l app=backend version=v1 --overwrite
+POD=$(kubectl get pods -l app=backend -o jsonpath='{.items[0].metadata.name}')
+kubectl label pod "$POD" version=v2 --overwrite
+```
 
 ```bash
 kubectl apply -f - <<EOF
@@ -290,6 +353,10 @@ spec:
 EOF
 ```
 
+What this does:
+- **DestinationRule** defines logical subsets (v1/v2) by pod labels.
+- **VirtualService** routes requests with header `canary: true` to v2, while all other traffic goes to v1.
+
 ### Step 3: Test Canary Deployment
 
 ```bash
@@ -307,6 +374,8 @@ exit
 #### Verify: Traffic Routing
 
 The canary header should route to v2, regular traffic to v1.
+
+Business impact: You can safely test a new version with a small audience and instantly shift traffic or roll back without downtime.
 
 #### Reflection Questions
 - How does this reduce deployment risk?
@@ -328,9 +397,14 @@ kubectl run debug --image=nicolaka/netshoot -it --rm -- bash
 Inside debug pod:
 
 ```bash
-istioctl proxy-config cluster frontend-$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}' | cut -d- -f2-) | head -10
+POD=$(kubectl get pod -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config clusters "$POD" | head -10
 exit
 ```
+
+Why this step: Peeking into the sidecar shows the infrastructure features (clusters/endpoints, retry policies, TLS settings) applied without any app code.
+
+How to read this: You’re listing upstream clusters the proxy knows about. Seeing entries for `backend` confirms the mesh programs traffic for you.
 
 ### Step 2: Configure Circuit Breaker
 
@@ -359,6 +433,22 @@ EOF
 kubectl get destinationrule backend-circuit-breaker -o yaml
 ```
 
+What this does (in business terms):
+- **Connection pool limits** prevent any one client from overwhelming `backend`.
+- **Outlier detection** automatically ejects unhealthy instances to protect users.
+
+Why this matters: These reliability patterns are consistent across all services—no developer code required.
+
+Optional (to see it in action):
+
+```bash
+# Generate bursty traffic and observe that unhealthy pods are ejected briefly
+kubectl run load-burst --image=curlimages/curl --restart=Never -- /bin/sh -lc 'for i in $(seq 1 200); do curl -s -o /dev/null http://backend; sleep 0.05; done'
+kubectl logs deploy/backend | tail -n 20 | cat
+```
+
+PM lens: Instead of teams building bespoke circuit breakers, platform sets one consistent policy that protects customer experience.
+
 #### Reflection Questions
 - How much code would developers need to write for these features?
 - What's the consistency benefit of infrastructure-level policies?
@@ -370,6 +460,8 @@ kubectl get destinationrule backend-circuit-breaker -o yaml
 - **Monitoring**: Zero instrumentation code
 
 ## Exercise 7: ROI Calculation Workshop
+
+Why this exercise: Translate technical capabilities into dollars and time saved so Marcus can justify investment to his board and plan hiring against platform leverage.
 
 ### Step 1: Calculate Current Infrastructure Costs
 
@@ -395,6 +487,8 @@ cat > marcus-current-costs.md << EOF
 EOF
 ```
 
+PM guidance: Replace time and rate assumptions with your company’s actual data. Anchor on blended rates and historical incident metrics to keep the model credible.
+
 ### Step 2: Calculate Service Mesh Value
 
 ```bash
@@ -419,6 +513,8 @@ cat > marcus-service-mesh-value.md << EOF
 **ROI: 652% (excluding infrastructure costs)**
 EOF
 ```
+
+How to present: Lead with outcomes (faster releases, fewer incidents), then show the calculation that ties platform features to saved engineering hours and avoided downtime.
 
 ### Step 3: Analyze DORA Metrics Impact
 
@@ -523,6 +619,11 @@ cat >> build-vs-buy.md << EOF
 EOF
 ```
 
+PM talk track (steel‑man first):
+- Acknowledge that deployment controllers, gateways, and APMs solve real parts of the problem very well
+- Position mesh as the consolidation layer for runtime identity, L7 policy, and uniform telemetry across teams at scale
+- Emphasize coexistence: keep best‑of‑breed tools and add mesh where cross‑service consistency is required
+
 #### Verify: Review Analysis
 
 ```bash
@@ -565,6 +666,12 @@ EOF
 ```bash
 kubectl get istiooperator -o yaml
 ```
+
+Why this step: Shows how the platform team can set org‑wide defaults (retries, telemetry providers) once, without touching app code.
+
+What to look for: The `IstioOperator` reflects centralized defaults. New services inherit these policies automatically.
+
+PM lens: Policies defined once are applied everywhere—reducing cognitive load on developers and accelerating consistent best practices.
 
 #### Reflection Questions
 - How does this enable platform team efficiency?
